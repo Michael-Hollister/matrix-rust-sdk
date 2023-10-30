@@ -536,6 +536,10 @@ impl OlmMachine {
             })
             .collect();
 
+        // TODO: need to create appropriate FFI mapping for room events
+        #[cfg(feature = "unstable-msc3917")]
+        let room_events: &BTreeMap<OwnedRoomId, &Vec<Raw<ruma::events::AnySyncStateEvent>>> = Default::default();
+
         let unused_fallback_keys: Option<Vec<DeviceKeyAlgorithm>> =
             unused_fallback_keys.map(|u| u.into_iter().map(DeviceKeyAlgorithm::from).collect());
 
@@ -546,8 +550,11 @@ impl OlmMachine {
                 one_time_keys_counts: &key_counts,
                 unused_fallback_keys: unused_fallback_keys.as_deref(),
                 next_batch_token: Some(next_batch_token),
-            }),
-        )?;
+            },
+            #[cfg(feature = "unstable-msc3917")]
+            room_events
+        ),
+    )?;
 
         let to_device_events =
             to_device_events.into_iter().map(|event| event.json().get().to_owned()).collect();

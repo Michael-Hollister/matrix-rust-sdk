@@ -19,6 +19,8 @@ use std::sync::{
     Arc,
 };
 
+#[cfg(feature = "unstable-msc3917")]
+use pk_signing::RoomSigning;
 use pk_signing::{MasterSigning, PickledSignings, SelfSigning, Signing, SigningError, UserSigning};
 use ruma::{
     api::client::keys::upload_signatures::v3::{Request as SignatureUploadRequest, SignedKeys},
@@ -31,6 +33,8 @@ use tokio::sync::Mutex;
 use vodozemac::Ed25519Signature;
 
 use super::StaticAccountData;
+#[cfg(feature = "unstable-msc3917")]
+use crate::types::RoomSigningPubkey;
 use crate::{
     error::SignatureError,
     requests::UploadSigningKeysRequest,
@@ -55,6 +59,8 @@ pub struct PrivateCrossSigningIdentity {
     pub(crate) master_key: Arc<Mutex<Option<MasterSigning>>>,
     pub(crate) user_signing_key: Arc<Mutex<Option<UserSigning>>>,
     pub(crate) self_signing_key: Arc<Mutex<Option<SelfSigning>>>,
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) room_signing_key: Arc<Mutex<Option<RoomSigning>>>,
 }
 
 /// A struct containing information on whether any of our cross-signing keys
@@ -67,12 +73,25 @@ pub struct DiffResult {
     self_signing_differs: bool,
     /// Does the user-signing key differ?
     user_signing_differs: bool,
+    /// Does the room-signing key differ?
+    #[cfg(feature = "unstable-msc3917")]
+    room_signing_differs: bool,
 }
 
 impl DiffResult {
     /// Do any of the cross-signing keys differ?
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub fn any_differ(&self) -> bool {
         self.master_differs || self.self_signing_differs || self.user_signing_differs
+    }
+
+    /// Do any of the cross-signing keys differ?
+    #[cfg(feature = "unstable-msc3917")]
+    pub fn any_differ(&self) -> bool {
+        self.master_differs
+            || self.self_signing_differs
+            || self.user_signing_differs
+            || self.room_signing_differs
     }
 
     /// Do none of the cross-signing keys differ?
@@ -107,6 +126,10 @@ pub struct CrossSigningStatus {
     /// Do we have the user signing key, this one is necessary to sign other
     /// users.
     pub has_user_signing: bool,
+    /// Do we have the room signing key, this one is necessary to sign room
+    /// state events.
+    #[cfg(feature = "unstable-msc3917")]
+    pub has_room_signing: bool,
 }
 
 impl PrivateCrossSigningIdentity {
@@ -124,12 +147,32 @@ impl PrivateCrossSigningIdentity {
     ///
     /// An empty identity indicates that either no identity was created for this
     /// use or that another device created it and hasn't shared it yet with us.
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub async fn is_empty(&self) -> bool {
         let has_master = self.master_key.lock().await.is_some();
         let has_user = self.user_signing_key.lock().await.is_some();
         let has_self = self.self_signing_key.lock().await.is_some();
 
         !(has_master && has_user && has_self)
+    }
+
+    /// Is the identity empty.
+    ///
+    /// An empty identity doesn't contain any private keys.
+    ///
+    /// It is usual for the identity not to contain the master key since the
+    /// master key is only needed to sign the subkeys.
+    ///
+    /// An empty identity indicates that either no identity was created for this
+    /// use or that another device created it and hasn't shared it yet with us.
+    #[cfg(feature = "unstable-msc3917")]
+    pub async fn is_empty(&self) -> bool {
+        let has_master = self.master_key.lock().await.is_some();
+        let has_user = self.user_signing_key.lock().await.is_some();
+        let has_self = self.self_signing_key.lock().await.is_some();
+        let has_room = self.room_signing_key.lock().await.is_some();
+
+        !(has_master && has_user && has_self && has_room)
     }
 
     /// Get the key ID of the master key.
@@ -150,6 +193,12 @@ impl PrivateCrossSigningIdentity {
         self.user_signing_key.lock().await.is_some()
     }
 
+    /// Can we sign room state events, i.e. do we have a room signing key.
+    #[cfg(feature = "unstable-msc3917")]
+    pub async fn can_sign_room(&self) -> bool {
+        self.room_signing_key.lock().await.is_some()
+    }
+
     /// Do we have the master key.
     pub async fn has_master_key(&self) -> bool {
         self.master_key.lock().await.is_some()
@@ -162,6 +211,8 @@ impl PrivateCrossSigningIdentity {
             has_master: self.has_master_key().await,
             has_self_signing: self.can_sign_devices().await,
             has_user_signing: self.can_sign_users().await,
+            #[cfg(feature = "unstable-msc3917")]
+            has_room_signing: self.can_sign_room().await,
         }
     }
 
@@ -178,6 +229,12 @@ impl PrivateCrossSigningIdentity {
     /// Get the public part of the user-signing key, if we have one.
     pub async fn user_signing_public_key(&self) -> Option<UserSigningPubkey> {
         self.user_signing_key.lock().await.as_ref().map(|k| k.public_key.to_owned())
+    }
+
+    /// Get the public part of the room-signing key, if we have one.
+    #[cfg(feature = "unstable-msc3917")]
+    pub async fn room_signing_public_key(&self) -> Option<RoomSigningPubkey> {
+        self.room_signing_key.lock().await.as_ref().map(|k| k.public_key.to_owned())
     }
 
     /// Export the seed of the private cross signing key
@@ -199,10 +256,15 @@ impl PrivateCrossSigningIdentity {
             SecretName::CrossSigningSelfSigningKey => {
                 self.self_signing_key.lock().await.as_ref().map(|m| m.export_seed())
             }
+            #[cfg(feature = "unstable-msc3917")]
+            SecretName::CrossSigningRoomSigningKey => {
+                self.room_signing_key.lock().await.as_ref().map(|m| m.export_seed())
+            }
             _ => None,
         }
     }
 
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub(crate) async fn import_secret(
         &self,
         public_identity: OwnUserIdentity,
@@ -219,12 +281,31 @@ impl PrivateCrossSigningIdentity {
         self.import_secrets(public_identity, master, self_signing, user_signing).await
     }
 
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) async fn import_secret(
+        &self,
+        public_identity: OwnUserIdentity,
+        secret_name: &SecretName,
+        seed: &str,
+    ) -> Result<(), SecretImportError> {
+        let (master, self_signing, user_signing, room_signing) = match secret_name {
+            SecretName::CrossSigningMasterKey => (Some(seed), None, None, None),
+            SecretName::CrossSigningSelfSigningKey => (None, Some(seed), None, None),
+            SecretName::CrossSigningUserSigningKey => (None, None, Some(seed), None),
+            SecretName::CrossSigningUserSigningKey => (None, None, None, Some(seed)),
+            _ => return Ok(()),
+        };
+
+        self.import_secrets(public_identity, master, self_signing, user_signing, room_signing).await
+    }
+
     pub(crate) async fn import_secrets(
         &self,
         public_identity: OwnUserIdentity,
         master_key: Option<&str>,
         self_signing_key: Option<&str>,
         user_signing_key: Option<&str>,
+        #[cfg(feature = "unstable-msc3917")] room_signing_key: Option<&str>,
     ) -> Result<(), SecretImportError> {
         let master = if let Some(master_key) = master_key {
             let master = MasterSigning::from_base64(self.user_id().to_owned(), master_key)?;
@@ -262,6 +343,19 @@ impl PrivateCrossSigningIdentity {
             Ok(None)
         }?;
 
+        #[cfg(feature = "unstable-msc3917")]
+        let room_signing = if let Some(room_signing_key) = room_signing_key {
+            let subkey = RoomSigning::from_base64(self.user_id().to_owned(), room_signing_key)?;
+
+            if public_identity.room_signing_key() == &subkey.public_key {
+                Ok(Some(subkey))
+            } else {
+                Err(SecretImportError::MismatchedPublicKeys)
+            }
+        } else {
+            Ok(None)
+        }?;
+
         if let Some(master) = master {
             *self.master_key.lock().await = Some(master);
         }
@@ -272,6 +366,11 @@ impl PrivateCrossSigningIdentity {
 
         if let Some(user_signing) = user_signing {
             *self.user_signing_key.lock().await = Some(user_signing);
+        }
+
+        #[cfg(feature = "unstable-msc3917")]
+        if let Some(room_signing) = room_signing {
+            *self.room_signing_key.lock().await = Some(room_signing);
         }
 
         Ok(())
@@ -289,6 +388,7 @@ impl PrivateCrossSigningIdentity {
         master_key: Option<&str>,
         self_signing_key: Option<&str>,
         user_signing_key: Option<&str>,
+        #[cfg(feature = "unstable-msc3917")] room_signing_key: Option<&str>,
     ) -> Result<(), SecretImportError> {
         if let Some(master_key) = master_key {
             let master = MasterSigning::from_base64(self.user_id().to_owned(), master_key)?;
@@ -303,6 +403,12 @@ impl PrivateCrossSigningIdentity {
         if let Some(self_signing_key) = self_signing_key {
             let subkey = SelfSigning::from_base64(self.user_id().to_owned(), self_signing_key)?;
             *self.self_signing_key.lock().await = Some(subkey);
+        }
+
+        #[cfg(feature = "unstable-msc3917")]
+        if let Some(room_signing_key) = room_signing_key {
+            let subkey = RoomSigning::from_base64(self.user_id().to_owned(), room_signing_key)?;
+            *self.room_signing_key.lock().await = Some(subkey);
         }
 
         Ok(())
@@ -328,9 +434,15 @@ impl PrivateCrossSigningIdentity {
             *self.self_signing_key.lock().await = None;
         }
 
+        #[cfg(feature = "unstable-msc3917")]
+        if result.room_signing_differs {
+            *self.room_signing_key.lock().await = None;
+        }
+
         result
     }
 
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub(crate) async fn get_public_identity_diff(
         &self,
         public_identity: &ReadOnlyOwnUserIdentity,
@@ -353,6 +465,39 @@ impl PrivateCrossSigningIdentity {
         DiffResult { master_differs, user_signing_differs, self_signing_differs }
     }
 
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) async fn get_public_identity_diff(
+        &self,
+        public_identity: &ReadOnlyOwnUserIdentity,
+    ) -> DiffResult {
+        let master_differs = self
+            .master_public_key()
+            .await
+            .is_some_and(|master| &master != public_identity.master_key());
+
+        let user_signing_differs = self
+            .user_signing_public_key()
+            .await
+            .is_some_and(|subkey| &subkey != public_identity.user_signing_key());
+
+        let self_signing_differs = self
+            .self_signing_public_key()
+            .await
+            .is_some_and(|subkey| &subkey != public_identity.self_signing_key());
+
+        let room_signing_differs = self
+            .room_signing_public_key()
+            .await
+            .is_some_and(|subkey| &subkey != public_identity.room_signing_key());
+
+        DiffResult {
+            master_differs,
+            user_signing_differs,
+            self_signing_differs,
+            room_signing_differs,
+        }
+    }
+
     /// Get the names of the secrets we are missing.
     pub(crate) async fn get_missing_secrets(&self) -> Vec<SecretName> {
         let mut missing = Vec::new();
@@ -369,6 +514,11 @@ impl PrivateCrossSigningIdentity {
             missing.push(SecretName::CrossSigningUserSigningKey);
         }
 
+        #[cfg(feature = "unstable-msc3917")]
+        if !self.can_sign_room().await {
+            missing.push(SecretName::CrossSigningRoomSigningKey);
+        }
+
         missing
     }
 
@@ -380,6 +530,8 @@ impl PrivateCrossSigningIdentity {
             master_key: Arc::new(Mutex::new(None)),
             self_signing_key: Arc::new(Mutex::new(None)),
             user_signing_key: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "unstable-msc3917")]
+            room_signing_key: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -413,7 +565,23 @@ impl PrivateCrossSigningIdentity {
             .public_key
             .clone();
 
+        #[cfg(feature = "unstable-msc3917")]
+        let room_signing = self
+            .room_signing_key
+            .lock()
+            .await
+            .as_ref()
+            .ok_or(SignatureError::MissingSigningKey)?
+            .public_key
+            .clone();
+
+        #[cfg(not(feature = "unstable-msc3917"))]
         let identity = ReadOnlyOwnUserIdentity::new(master, self_signing, user_signing)?;
+
+        #[cfg(feature = "unstable-msc3917")]
+        let identity =
+            ReadOnlyOwnUserIdentity::new(master, self_signing, user_signing, room_signing)?;
+
         identity.mark_as_verified();
 
         Ok(identity)
@@ -484,6 +652,11 @@ impl PrivateCrossSigningIdentity {
         Ok(SignatureUploadRequest::new(signed_keys))
     }
 
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) async fn sign_event(&self) {
+        todo!()
+    }
+
     pub(crate) async fn sign(&self, message: &str) -> Result<Ed25519Signature, SignatureError> {
         Ok(self
             .master_key
@@ -531,6 +704,7 @@ impl PrivateCrossSigningIdentity {
         (identity, request, signature_request)
     }
 
+    #[cfg(not(feature = "unstable-msc3917"))]
     async fn new_helper(user_id: &UserId, master: MasterSigning) -> Self {
         let user = Signing::new();
         let mut public_key = user.cross_signing_key(user_id.to_owned(), KeyUsage::UserSigning);
@@ -561,6 +735,53 @@ impl PrivateCrossSigningIdentity {
             master_key: Arc::new(Mutex::new(Some(master))),
             self_signing_key: Arc::new(Mutex::new(Some(self_signing))),
             user_signing_key: Arc::new(Mutex::new(Some(user))),
+        }
+    }
+
+    #[cfg(feature = "unstable-msc3917")]
+    async fn new_helper(user_id: &UserId, master: MasterSigning) -> Self {
+        let user = Signing::new();
+        let mut public_key = user.cross_signing_key(user_id.to_owned(), KeyUsage::UserSigning);
+        master.sign_subkey(&mut public_key);
+
+        let user = UserSigning {
+            inner: user,
+            public_key: public_key
+                .try_into()
+                .expect("We can always create a new random UserSigningPubkey"),
+        };
+
+        let self_signing = Signing::new();
+        let mut public_key =
+            self_signing.cross_signing_key(user_id.to_owned(), KeyUsage::SelfSigning);
+        master.sign_subkey(&mut public_key);
+
+        let self_signing = SelfSigning {
+            inner: self_signing,
+            public_key: public_key
+                .try_into()
+                .expect("We can always create a new random SelfSigningPubkey"),
+        };
+
+        let room_signing = Signing::new();
+        let mut public_key =
+            room_signing.cross_signing_key(user_id.to_owned(), KeyUsage::RoomSigning);
+        master.sign_subkey(&mut public_key);
+
+        let room_signing = RoomSigning {
+            inner: room_signing,
+            public_key: public_key
+                .try_into()
+                .expect("We can always create a new random RoomSigningPubkey"),
+        };
+
+        Self {
+            user_id: user_id.into(),
+            shared: Arc::new(AtomicBool::new(false)),
+            master_key: Arc::new(Mutex::new(Some(master))),
+            self_signing_key: Arc::new(Mutex::new(Some(self_signing))),
+            user_signing_key: Arc::new(Mutex::new(Some(user))),
+            room_signing_key: Arc::new(Mutex::new(Some(room_signing))),
         }
     }
 
@@ -612,7 +833,15 @@ impl PrivateCrossSigningIdentity {
 
         let user_signing_key = self.user_signing_key.lock().await.as_ref().map(|m| m.pickle());
 
+        #[cfg(feature = "unstable-msc3917")]
+        let room_signing_key = self.room_signing_key.lock().await.as_ref().map(|m| m.pickle());
+
+        #[cfg(not(feature = "unstable-msc3917"))]
         let keys = PickledSignings { master_key, user_signing_key, self_signing_key };
+
+        #[cfg(feature = "unstable-msc3917")]
+        let keys =
+            PickledSignings { master_key, user_signing_key, self_signing_key, room_signing_key };
 
         PickledCrossSigningIdentity { user_id: self.user_id.clone(), shared: self.shared(), keys }
     }
@@ -622,6 +851,7 @@ impl PrivateCrossSigningIdentity {
     /// # Panic
     ///
     /// Panics if the pickle_key isn't 32 bytes long.
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub async fn from_pickle(pickle: PickledCrossSigningIdentity) -> Result<Self, SigningError> {
         let keys = pickle.keys;
 
@@ -638,8 +868,33 @@ impl PrivateCrossSigningIdentity {
         })
     }
 
+    /// Restore the private cross signing identity from a pickle.
+    ///
+    /// # Panic
+    ///
+    /// Panics if the pickle_key isn't 32 bytes long.
+    #[cfg(feature = "unstable-msc3917")]
+    pub async fn from_pickle(pickle: PickledCrossSigningIdentity) -> Result<Self, SigningError> {
+        let keys = pickle.keys;
+
+        let master = keys.master_key.map(MasterSigning::from_pickle).transpose()?;
+        let self_signing = keys.self_signing_key.map(SelfSigning::from_pickle).transpose()?;
+        let user_signing = keys.user_signing_key.map(UserSigning::from_pickle).transpose()?;
+        let room_signing = keys.room_signing_key.map(RoomSigning::from_pickle).transpose()?;
+
+        Ok(Self {
+            user_id: (*pickle.user_id).into(),
+            shared: Arc::new(AtomicBool::from(pickle.shared)),
+            master_key: Arc::new(Mutex::new(master)),
+            self_signing_key: Arc::new(Mutex::new(self_signing)),
+            user_signing_key: Arc::new(Mutex::new(user_signing)),
+            room_signing_key: Arc::new(Mutex::new(room_signing)),
+        })
+    }
+
     /// Get the upload request that is needed to share the public keys of this
     /// identity.
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub(crate) async fn as_upload_request(&self) -> UploadSigningKeysRequest {
         let master_key =
             self.master_key.lock().await.as_ref().map(|k| k.public_key.as_ref().clone());
@@ -651,6 +906,30 @@ impl PrivateCrossSigningIdentity {
             self.self_signing_key.lock().await.as_ref().map(|k| k.public_key.as_ref().clone());
 
         UploadSigningKeysRequest { master_key, self_signing_key, user_signing_key }
+    }
+
+    /// Get the upload request that is needed to share the public keys of this
+    /// identity.
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) async fn as_upload_request(&self) -> UploadSigningKeysRequest {
+        let master_key =
+            self.master_key.lock().await.as_ref().map(|k| k.public_key.as_ref().clone());
+
+        let user_signing_key =
+            self.user_signing_key.lock().await.as_ref().map(|k| k.public_key.as_ref().clone());
+
+        let self_signing_key =
+            self.self_signing_key.lock().await.as_ref().map(|k| k.public_key.as_ref().clone());
+
+        let room_signing_key =
+            self.room_signing_key.lock().await.as_ref().map(|k| k.public_key.as_ref().clone());
+
+        UploadSigningKeysRequest {
+            master_key,
+            self_signing_key,
+            user_signing_key,
+            room_signing_key,
+        }
     }
 }
 
@@ -720,6 +999,12 @@ mod tests {
         master_key
             .public_key
             .verify_subkey(&identity.user_signing_key.lock().await.as_ref().unwrap().public_key)
+            .unwrap();
+
+        #[cfg(feature = "unstable-msc3917")]
+        master_key
+            .public_key
+            .verify_subkey(&identity.room_signing_key.lock().await.as_ref().unwrap().public_key)
             .unwrap();
     }
 
@@ -808,4 +1093,6 @@ mod tests {
 
         user_signing.public_key.verify_master_key(bob_public.master_key()).unwrap();
     }
+
+    // todo: Add tests for event signing
 }

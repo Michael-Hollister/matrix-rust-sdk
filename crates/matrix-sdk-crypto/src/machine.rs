@@ -23,6 +23,8 @@ use matrix_sdk_common::deserialized_responses::{
     AlgorithmInfo, DeviceLinkProblem, EncryptionInfo, TimelineEvent, VerificationLevel,
     VerificationState,
 };
+#[cfg(feature = "unstable-msc3917")]
+use ruma::{api::client::sync::sync_events::v3::Rooms, OwnedRoomId};
 use ruma::{
     api::client::{
         dehydrated_device::DehydratedDeviceData,
@@ -1135,11 +1137,21 @@ impl OlmMachine {
     pub async fn receive_sync_changes(
         &self,
         sync_changes: EncryptionSyncChanges<'_>,
+        #[cfg(feature = "unstable-msc3917")] room_events: &BTreeMap<
+            OwnedRoomId,
+            &Vec<Raw<ruma::events::AnySyncStateEvent>>,
+        >,
     ) -> OlmResult<(Vec<Raw<AnyToDeviceEvent>>, Vec<RoomKeyInfo>)> {
         let mut store_transaction = self.inner.store.transaction().await?;
 
-        let (events, changes) =
-            self.preprocess_sync_changes(&mut store_transaction, sync_changes).await?;
+        let (events, changes) = self
+            .preprocess_sync_changes(
+                &mut store_transaction,
+                sync_changes,
+                #[cfg(feature = "unstable-msc3917")]
+                room_events,
+            )
+            .await?;
 
         // Technically save_changes also does the same work, so if it's slow we could
         // refactor this to do it only once.
@@ -1156,6 +1168,10 @@ impl OlmMachine {
         &self,
         transaction: &mut StoreTransaction,
         sync_changes: EncryptionSyncChanges<'_>,
+        #[cfg(feature = "unstable-msc3917")] room_events: &BTreeMap<
+            OwnedRoomId,
+            &Vec<Raw<ruma::events::AnySyncStateEvent>>,
+        >,
     ) -> OlmResult<(Vec<Raw<AnyToDeviceEvent>>, Changes)> {
         // Remove verification objects that have expired or are done.
         let mut events = self.inner.verification_machine.garbage_collect();
@@ -1182,6 +1198,9 @@ impl OlmMachine {
         {
             error!(error = ?e, "Error marking a tracked user as changed");
         }
+
+        #[cfg(feature = "unstable-msc3917")]
+        self.verify_room_events(&mut changes, room_events).await;
 
         for raw_event in sync_changes.to_device_events {
             let raw_event =
@@ -1836,6 +1855,7 @@ impl OlmMachine {
     ///
     /// This method returns `None` if we don't have any private cross signing
     /// keys.
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub async fn export_cross_signing_keys(&self) -> StoreResult<Option<CrossSigningKeyExport>> {
         let master_key = self.store().export_secret(&SecretName::CrossSigningMasterKey).await?;
         let self_signing_key =
@@ -1848,6 +1868,41 @@ impl OlmMachine {
         } else {
             Some(CrossSigningKeyExport { master_key, self_signing_key, user_signing_key })
         })
+    }
+
+    /// Export all the private cross signing keys we have.
+    ///
+    /// The export will contain the seed for the ed25519 keys as a unpadded
+    /// base64 encoded string.
+    ///
+    /// This method returns `None` if we don't have any private cross signing
+    /// keys.
+    #[cfg(feature = "unstable-msc3917")]
+    pub async fn export_cross_signing_keys(&self) -> StoreResult<Option<CrossSigningKeyExport>> {
+        let master_key = self.store().export_secret(&SecretName::CrossSigningMasterKey).await?;
+        let self_signing_key =
+            self.store().export_secret(&SecretName::CrossSigningSelfSigningKey).await?;
+        let user_signing_key =
+            self.store().export_secret(&SecretName::CrossSigningUserSigningKey).await?;
+        let room_signing_key =
+            self.store().export_secret(&SecretName::CrossSigningRoomSigningKey).await?;
+
+        Ok(
+            if master_key.is_none()
+                && self_signing_key.is_none()
+                && user_signing_key.is_none()
+                && room_signing_key.is_none()
+            {
+                None
+            } else {
+                Some(CrossSigningKeyExport {
+                    master_key,
+                    self_signing_key,
+                    user_signing_key,
+                    room_signing_key,
+                })
+            },
+        )
     }
 
     /// Import our private cross signing keys.
@@ -2397,13 +2452,17 @@ pub(crate) mod tests {
         let machine = OlmMachine::new(user_id(), alice_device_id()).await;
         let key_counts = BTreeMap::from([(DeviceKeyAlgorithm::SignedCurve25519, 49u8.into())]);
         machine
-            .receive_sync_changes(EncryptionSyncChanges {
-                to_device_events: Vec::new(),
-                changed_devices: &Default::default(),
-                one_time_keys_counts: &key_counts,
-                unused_fallback_keys: None,
-                next_batch_token: None,
-            })
+            .receive_sync_changes(
+                EncryptionSyncChanges {
+                    to_device_events: Vec::new(),
+                    changed_devices: &Default::default(),
+                    one_time_keys_counts: &key_counts,
+                    unused_fallback_keys: None,
+                    next_batch_token: None,
+                },
+                #[cfg(feature = "unstable-msc3917")]
+                &Default::default(),
+            )
             .await
             .expect("We should be able to update our one-time key counts");
 
@@ -2688,13 +2747,17 @@ pub(crate) mod tests {
             alice.inner.group_session_manager.get_outbound_group_session(room_id).unwrap();
 
         let (decrypted, room_key_updates) = bob
-            .receive_sync_changes(EncryptionSyncChanges {
-                to_device_events: vec![event],
-                changed_devices: &Default::default(),
-                one_time_keys_counts: &Default::default(),
-                unused_fallback_keys: None,
-                next_batch_token: None,
-            })
+            .receive_sync_changes(
+                EncryptionSyncChanges {
+                    to_device_events: vec![event],
+                    changed_devices: &Default::default(),
+                    one_time_keys_counts: &Default::default(),
+                    unused_fallback_keys: None,
+                    next_batch_token: None,
+                },
+                #[cfg(feature = "unstable-msc3917")]
+                &Default::default(),
+            )
             .await
             .unwrap();
 
@@ -2904,13 +2967,17 @@ pub(crate) mod tests {
 
         let event = json_convert(&event).unwrap();
 
-        bob.receive_sync_changes(EncryptionSyncChanges {
-            to_device_events: vec![event],
-            changed_devices: &Default::default(),
-            one_time_keys_counts: &Default::default(),
-            unused_fallback_keys: None,
-            next_batch_token: None,
-        })
+        bob.receive_sync_changes(
+            EncryptionSyncChanges {
+                to_device_events: vec![event],
+                changed_devices: &Default::default(),
+                one_time_keys_counts: &Default::default(),
+                unused_fallback_keys: None,
+                next_batch_token: None,
+            },
+            #[cfg(feature = "unstable-msc3917")]
+            &Default::default(),
+        )
         .await
         .unwrap();
 
@@ -3725,13 +3792,17 @@ pub(crate) mod tests {
         let key_counts: BTreeMap<_, _> = Default::default();
 
         let _ = bob
-            .receive_sync_changes(EncryptionSyncChanges {
-                to_device_events: vec![event],
-                changed_devices: &changed_devices,
-                one_time_keys_counts: &key_counts,
-                unused_fallback_keys: None,
-                next_batch_token: None,
-            })
+            .receive_sync_changes(
+                EncryptionSyncChanges {
+                    to_device_events: vec![event],
+                    changed_devices: &changed_devices,
+                    one_time_keys_counts: &key_counts,
+                    unused_fallback_keys: None,
+                    next_batch_token: None,
+                },
+                #[cfg(feature = "unstable-msc3917")]
+                &Default::default(),
+            )
             .await
             .unwrap();
 
@@ -3773,13 +3844,17 @@ pub(crate) mod tests {
 
         let event: Raw<AnyToDeviceEvent> = json_convert(&event).unwrap();
 
-        bob.receive_sync_changes(EncryptionSyncChanges {
-            to_device_events: vec![event],
-            changed_devices: &changed_devices,
-            one_time_keys_counts: &key_counts,
-            unused_fallback_keys: None,
-            next_batch_token: None,
-        })
+        bob.receive_sync_changes(
+            EncryptionSyncChanges {
+                to_device_events: vec![event],
+                changed_devices: &changed_devices,
+                one_time_keys_counts: &key_counts,
+                unused_fallback_keys: None,
+                next_batch_token: None,
+            },
+            #[cfg(feature = "unstable-msc3917")]
+            &Default::default(),
+        )
         .await
         .unwrap();
 

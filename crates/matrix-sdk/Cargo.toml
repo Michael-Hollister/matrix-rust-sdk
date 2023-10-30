@@ -55,6 +55,7 @@ experimental-sliding-sync = [
     "dep:eyeball-im-util",
 ]
 experimental-widgets = ["dep:language-tags"]
+unstable-msc3917 = []
 
 docsrs = ["e2e-encryption", "sqlite", "sso-login", "qrcode", "image-proc"]
 

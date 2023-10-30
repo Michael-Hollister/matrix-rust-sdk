@@ -48,13 +48,27 @@ impl SlidingSyncResponseProcessor {
     }
 
     #[cfg(feature = "e2e-encryption")]
-    pub async fn handle_encryption(&mut self, extensions: &v4::Extensions) -> Result<()> {
+    pub async fn handle_encryption(
+        &mut self,
+        extensions: &v4::Extensions,
+        #[cfg(feature = "unstable-msc3917")] rooms: &std::collections::BTreeMap<
+            ruma::OwnedRoomId,
+            &Vec<Raw<ruma::events::AnySyncStateEvent>>,
+        >,
+    ) -> Result<()> {
         // This is an internal API misuse if this is triggered (calling
         // handle_room_response before this function), so panic is fine.
         assert!(self.response.is_none());
 
-        self.to_device_events =
-            self.client.base_client().process_sliding_sync_e2ee(extensions).await?;
+        self.to_device_events = self
+            .client
+            .base_client()
+            .process_sliding_sync_e2ee(
+                extensions,
+                #[cfg(feature = "unstable-msc3917")]
+                rooms,
+            )
+            .await?;
         Ok(())
     }
 

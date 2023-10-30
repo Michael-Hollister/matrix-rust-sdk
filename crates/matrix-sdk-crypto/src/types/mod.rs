@@ -65,6 +65,13 @@ pub enum Signature {
     Other(String),
 }
 
+// #[cfg(feature = "unstable-msc3917")]
+// #[derive(Clone, Debug, PartialEq, Eq)]
+// pub enum KeyId {
+//     RRK,
+//     RSK,
+// }
+
 /// Represents a signature that could not be decoded.
 ///
 /// This will currently only hold invalid Ed25519 signatures.
@@ -101,6 +108,13 @@ impl From<Ed25519Signature> for Signature {
 pub struct Signatures(
     BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceKeyId, Result<Signature, InvalidSignature>>>,
 );
+
+/// Signatures for a signed state event json.
+// #[cfg(feature = "unstable-msc3917")]
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// pub struct StateEventSignatures(
+//     BTreeMap<OwnedUserId, BTreeMap<KeyId, Result<Signature,
+// InvalidSignature>>>, );
 
 impl Signatures {
     /// Create a new, empty, signatures collection.
@@ -152,6 +166,13 @@ impl Signatures {
 impl Default for Signatures {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(feature = "unstable-msc3917")]
+impl From<BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceKeyId, Result<Signature, InvalidSignature>>>> for Signatures {
+    fn from(value: BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceKeyId, Result<Signature, InvalidSignature>>>) -> Self {
+        Signatures(value)
     }
 }
 

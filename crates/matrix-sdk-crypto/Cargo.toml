@@ -22,6 +22,7 @@ qrcode = ["dep:matrix-sdk-qrcode"]
 backups_v1 = ["dep:cbc"]
 message-ids = ["dep:ulid"]
 experimental-algorithms = []
+unstable-msc3917 = ["dep:ed25519-dalek"]
 
 # Testing helpers for implementations based upon this
 testing = ["dep:http"]
@@ -36,6 +37,7 @@ byteorder = { workspace = true }
 cbc = { version = "0.1.2", features = ["std"], optional = true }
 cfg-if = "1.0"
 ctr = "0.9.1"
+ed25519-dalek = { version = "2.0.0", features = ["pkcs8", "rand_core"], optional = true }
 eyeball = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
@@ -48,7 +50,8 @@ matrix-sdk-common = { version = "0.6.0", path = "../matrix-sdk-common" }
 pbkdf2 = { version = "0.12.2", default-features = false }
 rand = "0.8.5"
 rmp-serde = "1.1.1"
-ruma = { workspace = true, features = ["rand", "canonical-json", "unstable-msc3814"] }
+# ruma = { workspace = true, features = ["rand", "canonical-json", "unstable-msc3814"] }
+ruma = { workspace = true, features = ["rand", "canonical-json", "unstable-msc3814", "unstable-msc3917"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
 sha2 = "0.10.2"

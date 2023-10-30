@@ -3171,6 +3171,7 @@ dependencies = [
  "cfg-if",
  "ctor",
  "ctr",
+ "ed25519-dalek",
  "eyeball",
  "futures-core",
  "futures-executor",
@@ -4881,9 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "ruma"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c63fe7f06396db1480c40cf44a57ad4359847cf6c6b3cdaa67507a00a79bb9"
+version = "0.9.1"
 dependencies = [
  "assign",
  "js_int",
@@ -4894,13 +4893,13 @@ dependencies = [
  "ruma-federation-api",
  "ruma-html",
  "ruma-push-gateway-api",
+ "ruma-signatures",
+ "ruma-state-res",
 ]
 
 [[package]]
 name = "ruma-client-api"
 version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b9f07f9a17ff1fcc515eecf8efdb1cb6b92091555dc3ac25d434653b7b09d8d"
 dependencies = [
  "assign",
  "bytes",
@@ -4918,12 +4917,11 @@ dependencies = [
 [[package]]
 name = "ruma-common"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bd6a9c0dd0dc4986bf5fb963765f59fb0e3f462b7ca8ba466f47d217688865c"
 dependencies = [
  "as_variant",
  "base64 0.21.4",
  "bytes",
+ "ed25519-dalek",
  "form_urlencoded",
  "getrandom 0.2.10",
  "http",
@@ -4948,9 +4946,7 @@ dependencies = [
 
 [[package]]
 name = "ruma-events"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "804410aee778539202b5ee62065da212ff319f9c60049e7ada1bec3acd53a689"
+version = "0.27.5"
 dependencies = [
  "as_variant",
  "indexmap 2.0.2",
@@ -4974,8 +4970,6 @@ dependencies = [
 [[package]]
 name = "ruma-federation-api"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1901c1f27bc327652d58af2a130c73acef3198abeccd24cee97f7267fdf3fe7"
 dependencies = [
  "js_int",
  "ruma-common",
@@ -4987,8 +4981,6 @@ dependencies = [
 [[package]]
 name = "ruma-html"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9674a149b1a6965fe2174ba528c89ee201258abd9209bbe74953df7073a83a5b"
 dependencies = [
  "as_variant",
  "html5ever",
@@ -4999,9 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "ruma-identifiers-validation"
-version = "0.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c25112499dd02847c32fbae85ebf96719d89e6095dca560521576fecc44f71c8"
+version = "0.9.3"
 dependencies = [
  "js_int",
  "thiserror",
@@ -5010,8 +5000,6 @@ dependencies = [
 [[package]]
 name = "ruma-macros"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0280534a4b3e34416f883285fac4f9c408cd0b737890ae66f3e7a7056d14be80"
 dependencies = [
  "once_cell",
  "proc-macro-crate 2.0.0",
@@ -5026,14 +5014,40 @@ dependencies = [
 [[package]]
 name = "ruma-push-gateway-api"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f343045c4d4a5943f93b5014160af3c7413e6ee32ea47b147e1e91f2a977486b"
 dependencies = [
  "js_int",
  "ruma-common",
  "ruma-events",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ruma-signatures"
+version = "0.14.0"
+dependencies = [
+ "base64 0.21.4",
+ "ed25519-dalek",
+ "pkcs8",
+ "rand 0.8.5",
+ "ruma-common",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "ruma-state-res"
+version = "0.10.0"
+dependencies = [
+ "itertools 0.11.0",
+ "js_int",
+ "ruma-common",
+ "ruma-events",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

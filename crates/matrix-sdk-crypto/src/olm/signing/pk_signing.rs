@@ -19,6 +19,8 @@ use thiserror::Error;
 use vodozemac::{DecodeError, Ed25519PublicKey, Ed25519SecretKey, Ed25519Signature, KeyError};
 use zeroize::Zeroize;
 
+#[cfg(feature = "unstable-msc3917")]
+use crate::types::RoomSigningPubkey;
 use crate::{
     error::SignatureError,
     olm::utility::SignJson,
@@ -94,6 +96,14 @@ pub struct PickledUserSigning {
 pub struct PickledSelfSigning {
     pickle: PickledSigning,
     public_key: SelfSigningPubkey,
+}
+
+#[cfg(feature = "unstable-msc3917")]
+#[derive(Deserialize, Serialize)]
+#[allow(missing_debug_implementations)]
+pub struct PickledRoomSigning {
+    pickle: PickledSigning,
+    public_key: RoomSigningPubkey,
 }
 
 impl MasterSigning {
@@ -265,6 +275,68 @@ impl SelfSigning {
     }
 }
 
+#[cfg(feature = "unstable-msc3917")]
+impl RoomSigning {
+    pub fn pickle(&self) -> PickledRoomSigning {
+        let pickle = self.inner.pickle();
+        let public_key = self.public_key.clone();
+        PickledRoomSigning { pickle, public_key }
+    }
+
+    pub fn export_seed(&self) -> String {
+        self.inner.to_base64()
+    }
+
+    pub fn from_base64(user_id: OwnedUserId, key: &str) -> Result<Self, KeyError> {
+        let inner = Signing::from_base64(key)?;
+        let public_key = inner
+            .cross_signing_key(user_id, KeyUsage::RoomSigning)
+            .try_into()
+            .expect("A room-signing key can always be imported from a base64 encoded value");
+
+        Ok(Self { inner, public_key })
+    }
+
+    pub fn sign_room(
+        &self,
+        user: &ReadOnlyUserIdentity,
+    ) -> Result<CrossSigningKey, SignatureError> {
+        let signatures = self.sign_room_helper(user)?;
+        let mut master_key = user.master_key().as_ref().clone();
+
+        master_key.signatures = signatures;
+
+        Ok(master_key)
+    }
+
+    pub fn sign_room_helper(
+        &self,
+        user: &ReadOnlyUserIdentity,
+    ) -> Result<Signatures, SignatureError> {
+        let user_master: &CrossSigningKey = user.master_key().as_ref();
+        let signature = self.inner.sign_json(serde_json::to_value(user_master)?)?;
+
+        let mut signatures = Signatures::new();
+
+        signatures.add_signature(
+            self.public_key.user_id().to_owned(),
+            DeviceKeyId::from_parts(
+                DeviceKeyAlgorithm::Ed25519,
+                self.inner.public_key.to_base64().as_str().into(),
+            ),
+            signature,
+        );
+
+        Ok(signatures)
+    }
+
+    pub fn from_pickle(pickle: PickledRoomSigning) -> Result<Self, SigningError> {
+        let inner = Signing::from_pickle(pickle.pickle)?;
+
+        Ok(Self { inner, public_key: pickle.public_key })
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub struct SelfSigning {
     pub inner: Signing,
@@ -277,12 +349,21 @@ pub struct UserSigning {
     pub public_key: UserSigningPubkey,
 }
 
+#[cfg(feature = "unstable-msc3917")]
+#[derive(PartialEq, Debug)]
+pub struct RoomSigning {
+    pub inner: Signing,
+    pub public_key: RoomSigningPubkey,
+}
+
 #[derive(Serialize, Deserialize)]
 #[allow(missing_debug_implementations)]
 pub struct PickledSignings {
     pub master_key: Option<PickledMasterSigning>,
     pub user_signing_key: Option<PickledUserSigning>,
     pub self_signing_key: Option<PickledSelfSigning>,
+    #[cfg(feature = "unstable-msc3917")]
+    pub room_signing_key: Option<PickledRoomSigning>,
 }
 
 #[derive(Serialize, Deserialize)]

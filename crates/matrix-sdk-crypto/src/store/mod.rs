@@ -235,6 +235,18 @@ pub struct Changes {
     pub room_settings: HashMap<OwnedRoomId, RoomSettings>,
     pub secrets: Vec<GossippedSecret>,
     pub next_batch_token: Option<String>,
+    #[cfg(feature = "unstable-msc3917")]
+    pub verified_events: BTreeMap<OwnedRoomId, (ruma::RoomVersionId, BTreeSet<ruma::OwnedEventId>)>,
+    // consider removing room version as it may not really be needed
+    #[cfg(feature = "unstable-msc3917")]
+    pub unverified_events:
+        BTreeMap<OwnedRoomId, Vec<ruma::serde::Raw<ruma::events::AnySyncStateEvent>>>,
+    // pub unverified_events: BTreeMap<OwnedRoomId, Vec<(ruma::OwnedEventId,
+    // ruma::serde::Raw<ruma::events::AnySyncStateEvent>)>>,
+    #[cfg(feature = "unstable-msc3917")]
+    pub missing_identities: BTreeSet<OwnedUserId>,
+    // #[cfg(feature = "unstable-msc3917")]
+    // pub missing_event_verifying_keys: BTreeMap<OwnedUserId, crate::types::MasterPubkey>,
 }
 
 /// A user for which we are tracking the list of devices.
@@ -497,6 +509,9 @@ pub struct CrossSigningKeyExport {
     pub self_signing_key: Option<String>,
     /// The seed of the user signing key encoded as unpadded base64.
     pub user_signing_key: Option<String>,
+    /// The seed of the room signing key encoded as unpadded base64.
+    #[cfg(feature = "unstable-msc3917")]
+    pub room_signing_key: Option<String>,
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -914,6 +929,8 @@ impl Store {
                     export.master_key.as_deref(),
                     export.self_signing_key.as_deref(),
                     export.user_signing_key.as_deref(),
+                    #[cfg(feature = "unstable-msc3917")]
+                    export.room_signing_key.as_deref(),
                 )
                 .await?;
 

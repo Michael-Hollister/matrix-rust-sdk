@@ -54,6 +54,10 @@ impl BaseClient {
     pub async fn process_sliding_sync_e2ee(
         &self,
         extensions: &v4::Extensions,
+        #[cfg(feature = "unstable-msc3917")] rooms: &std::collections::BTreeMap<
+            ruma::OwnedRoomId,
+            &Vec<Raw<AnySyncStateEvent>>,
+        >,
     ) -> Result<Vec<Raw<AnyToDeviceEvent>>> {
         if extensions.is_empty() {
             return Ok(Default::default());
@@ -79,6 +83,7 @@ impl BaseClient {
         // Passing in the default empty maps and vecs for this is completely fine, since
         // the `OlmMachine` assumes empty maps/vecs mean no change in the one-time key
         // counts.
+        #[cfg(feature = "experimental-sliding-sync")]
         let to_device = self
             .preprocess_to_device_events(
                 matrix_sdk_crypto::EncryptionSyncChanges {
@@ -91,6 +96,8 @@ impl BaseClient {
                         .map(|to_device| to_device.next_batch.clone()),
                 },
                 &mut changes,
+                #[cfg(feature = "unstable-msc3917")]
+                rooms,
             )
             .await?;
 

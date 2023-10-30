@@ -30,6 +30,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{value::to_raw_value, Value};
 use vodozemac::{Ed25519PublicKey, KeyError};
 
+#[cfg(feature = "unstable-msc3917")]
+use super::RoomSigningPubkey;
 use super::{SelfSigningPubkey, UserSigningPubkey};
 use crate::types::{Signatures, SigningKeys};
 
@@ -136,6 +138,9 @@ pub(crate) enum CrossSigningSubKeys<'a> {
     SelfSigning(&'a SelfSigningPubkey),
     /// The user signing subkey.
     UserSigning(&'a UserSigningPubkey),
+    #[cfg(feature = "unstable-msc3917")]
+    /// The room signing subkey.
+    RoomSigning(&'a RoomSigningPubkey),
 }
 
 impl<'a> CrossSigningSubKeys<'a> {
@@ -144,6 +149,8 @@ impl<'a> CrossSigningSubKeys<'a> {
         match self {
             CrossSigningSubKeys::SelfSigning(key) => key.user_id(),
             CrossSigningSubKeys::UserSigning(key) => key.user_id(),
+            #[cfg(feature = "unstable-msc3917")]
+            CrossSigningSubKeys::RoomSigning(key) => key.user_id(),
         }
     }
 
@@ -152,6 +159,8 @@ impl<'a> CrossSigningSubKeys<'a> {
         match self {
             CrossSigningSubKeys::SelfSigning(key) => key.as_ref(),
             CrossSigningSubKeys::UserSigning(key) => key.as_ref(),
+            #[cfg(feature = "unstable-msc3917")]
+            CrossSigningSubKeys::RoomSigning(key) => key.as_ref(),
         }
     }
 }
@@ -165,5 +174,12 @@ impl<'a> From<&'a UserSigningPubkey> for CrossSigningSubKeys<'a> {
 impl<'a> From<&'a SelfSigningPubkey> for CrossSigningSubKeys<'a> {
     fn from(key: &'a SelfSigningPubkey) -> Self {
         CrossSigningSubKeys::SelfSigning(key)
+    }
+}
+
+#[cfg(feature = "unstable-msc3917")]
+impl<'a> From<&'a RoomSigningPubkey> for CrossSigningSubKeys<'a> {
+    fn from(key: &'a RoomSigningPubkey) -> Self {
+        CrossSigningSubKeys::RoomSigning(key)
     }
 }

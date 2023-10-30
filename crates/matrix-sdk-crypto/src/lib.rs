@@ -34,6 +34,9 @@ pub mod types;
 mod utilities;
 mod verification;
 
+#[cfg(feature = "unstable-msc3917")]
+mod event_verification;
+
 #[cfg(feature = "testing")]
 /// Testing facilities and helpers for crypto tests
 pub mod testing {

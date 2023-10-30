@@ -1888,13 +1888,17 @@ mod tests {
         pin_mut!(stream);
 
         bob_machine
-            .receive_sync_changes(EncryptionSyncChanges {
-                to_device_events: vec![event],
-                changed_devices: &Default::default(),
-                one_time_keys_counts: &Default::default(),
-                unused_fallback_keys: None,
-                next_batch_token: None,
-            })
+            .receive_sync_changes(
+                EncryptionSyncChanges {
+                    to_device_events: vec![event],
+                    changed_devices: &Default::default(),
+                    one_time_keys_counts: &Default::default(),
+                    unused_fallback_keys: None,
+                    next_batch_token: None,
+                },
+                #[cfg(feature = "unstable-msc3917")]
+                &Default::default(),
+            )
             .await
             .unwrap();
 

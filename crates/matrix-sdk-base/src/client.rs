@@ -571,14 +571,23 @@ impl BaseClient {
         encryption_sync_changes: EncryptionSyncChanges<'_>,
         #[cfg(feature = "experimental-sliding-sync")] changes: &mut StateChanges,
         #[cfg(not(feature = "experimental-sliding-sync"))] _changes: &mut StateChanges,
+        #[cfg(feature = "unstable-msc3917")] room_events: &BTreeMap<
+            ruma::OwnedRoomId,
+            &Vec<Raw<AnySyncStateEvent>>,
+        >,
     ) -> Result<Vec<Raw<ruma::events::AnyToDeviceEvent>>> {
         if let Some(o) = self.olm_machine().await.as_ref() {
             // Let the crypto machine handle the sync response, this
             // decrypts to-device events, but leaves room events alone.
             // This makes sure that we have the decryption keys for the room
             // events at hand.
-            let (events, room_key_updates) =
-                o.receive_sync_changes(encryption_sync_changes).await?;
+            let (events, room_key_updates) = o
+                .receive_sync_changes(
+                    encryption_sync_changes,
+                    #[cfg(feature = "unstable-msc3917")]
+                    room_events,
+                )
+                .await?;
 
             #[cfg(feature = "experimental-sliding-sync")]
             for room_key_update in room_key_updates {
@@ -708,6 +717,15 @@ impl BaseClient {
         let now = Instant::now();
         let mut changes = Box::new(StateChanges::new(response.next_batch.clone()));
 
+        #[cfg(all(feature = "e2e-encryption", feature = "unstable-msc3917"))]
+        let mut room_events = BTreeMap::from_iter(
+            response.rooms.join.iter().map(|r| (r.0.to_owned(), &r.1.state.events)),
+        );
+
+        #[cfg(all(feature = "e2e-encryption", feature = "unstable-msc3917"))]
+        room_events
+            .extend(response.rooms.leave.iter().map(|r| (r.0.to_owned(), &r.1.state.events)));
+
         #[cfg(feature = "e2e-encryption")]
         let to_device = self
             .preprocess_to_device_events(
@@ -719,6 +737,8 @@ impl BaseClient {
                     next_batch_token: Some(response.next_batch.clone()),
                 },
                 &mut changes,
+                #[cfg(feature = "unstable-msc3917")]
+                &room_events,
             )
             .await?;
 

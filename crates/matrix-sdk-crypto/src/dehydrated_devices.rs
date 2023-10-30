@@ -242,7 +242,12 @@ impl RehydratedDevice {
 
         let (_, changes) = self
             .rehydrated
-            .preprocess_sync_changes(&mut rehydrated_transaction, sync_changes)
+            .preprocess_sync_changes(
+                &mut rehydrated_transaction,
+                sync_changes,
+                #[cfg(feature = "unstable-msc3917")]
+                &Default::default(),
+            )
             .await?;
 
         // Now take the room keys and persist them in our original `OlmMachine`.

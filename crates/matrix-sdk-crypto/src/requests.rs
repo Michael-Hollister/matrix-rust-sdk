@@ -172,6 +172,11 @@ pub struct UploadSigningKeysRequest {
     /// or by the user's most recently uploaded master key if no master key
     /// is included in the request.
     pub user_signing_key: Option<CrossSigningKey>,
+    /// The user's room-signing key. Must be signed with the accompanied master,
+    /// or by the user's most recently uploaded master key if no master key
+    /// is included in the request.
+    #[cfg(feature = "unstable-msc3917")]
+    pub room_signing_key: Option<CrossSigningKey>,
 }
 
 /// Customized version of

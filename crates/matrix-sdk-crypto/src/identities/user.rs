@@ -33,6 +33,8 @@ use serde::{Deserialize, Serialize};
 use tracing::error;
 
 use super::{atomic_bool_deserializer, atomic_bool_serializer};
+#[cfg(feature = "unstable-msc3917")]
+use crate::types::RoomSigningPubkey;
 use crate::{
     error::SignatureError,
     store::{Changes, IdentityChanges, Store},
@@ -343,6 +345,15 @@ impl ReadOnlyUserIdentities {
         }
     }
 
+    /// Get the room-signing key of the identity.
+    #[cfg(feature = "unstable-msc3917")]
+    pub fn room_signing_key(&self) -> &RoomSigningPubkey {
+        match self {
+            ReadOnlyUserIdentities::Own(i) => &i.room_signing_key,
+            ReadOnlyUserIdentities::Other(i) => &i.room_signing_key,
+        }
+    }
+
     /// Destructure the enum into an `ReadOnlyOwnUserIdentity` if it's of the
     /// correct type.
     pub fn own(&self) -> Option<&ReadOnlyOwnUserIdentity> {
@@ -370,6 +381,8 @@ pub struct ReadOnlyUserIdentity {
     user_id: OwnedUserId,
     pub(crate) master_key: MasterPubkey,
     self_signing_key: SelfSigningPubkey,
+    #[cfg(feature = "unstable-msc3917")]
+    room_signing_key: RoomSigningPubkey,
 }
 
 impl PartialEq for ReadOnlyUserIdentity {
@@ -404,6 +417,7 @@ impl ReadOnlyUserIdentity {
     ///
     /// Returns a `SignatureError` if the self signing key fails to be correctly
     /// verified by the given master key.
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub(crate) fn new(
         master_key: MasterPubkey,
         self_signing_key: SelfSigningPubkey,
@@ -413,6 +427,34 @@ impl ReadOnlyUserIdentity {
         Ok(Self { user_id: master_key.user_id().into(), master_key, self_signing_key })
     }
 
+    /// Create a new user identity with the given master and self signing key.
+    ///
+    /// # Arguments
+    ///
+    /// * `master_key` - The master key of the user identity.
+    ///
+    /// * `self signing key` - The self signing key of user identity.
+    ///
+    /// Returns a `SignatureError` if the self signing key fails to be correctly
+    /// verified by the given master key.
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) fn new(
+        master_key: MasterPubkey,
+        self_signing_key: SelfSigningPubkey,
+        room_signing_key: RoomSigningPubkey,
+    ) -> Result<Self, SignatureError> {
+        master_key.verify_subkey(&self_signing_key)?;
+        master_key.verify_subkey(&room_signing_key)?;
+
+        Ok(Self {
+            user_id: master_key.user_id().into(),
+            master_key,
+            self_signing_key,
+            room_signing_key,
+        })
+    }
+
+    #[cfg(not(feature = "unstable-msc3917"))]
     #[cfg(test)]
     pub(crate) async fn from_private(identity: &crate::olm::PrivateCrossSigningIdentity) -> Self {
         let master_key = identity.master_key.lock().await.as_ref().unwrap().public_key.clone();
@@ -420,6 +462,18 @@ impl ReadOnlyUserIdentity {
             identity.self_signing_key.lock().await.as_ref().unwrap().public_key.clone();
 
         Self { user_id: identity.user_id().into(), master_key, self_signing_key }
+    }
+
+    #[cfg(feature = "unstable-msc3917")]
+    #[cfg(test)]
+    pub(crate) async fn from_private(identity: &crate::olm::PrivateCrossSigningIdentity) -> Self {
+        let master_key = identity.master_key.lock().await.as_ref().unwrap().public_key.clone();
+        let self_signing_key =
+            identity.self_signing_key.lock().await.as_ref().unwrap().public_key.clone();
+        let room_signing_key =
+            identity.room_signing_key.lock().await.as_ref().unwrap().public_key.clone();
+
+        Self { user_id: identity.user_id().into(), master_key, self_signing_key, room_signing_key }
     }
 
     /// Get the user id of this identity.
@@ -437,6 +491,12 @@ impl ReadOnlyUserIdentity {
         &self.self_signing_key
     }
 
+    /// Get the public room-signing key of the identity.
+    #[cfg(feature = "unstable-msc3917")]
+    pub fn room_signing_key(&self) -> &RoomSigningPubkey {
+        &self.room_signing_key
+    }
+
     /// Update the identity with a new master key and self signing key.
     ///
     /// # Arguments
@@ -452,10 +512,19 @@ impl ReadOnlyUserIdentity {
         &mut self,
         master_key: MasterPubkey,
         self_signing_key: SelfSigningPubkey,
+        #[cfg(feature = "unstable-msc3917")] room_signing_key: RoomSigningPubkey,
     ) -> Result<bool, SignatureError> {
         master_key.verify_subkey(&self_signing_key)?;
 
+        #[cfg(feature = "unstable-msc3917")]
+        master_key.verify_subkey(&room_signing_key)?;
+
+        #[cfg(not(feature = "unstable-msc3917"))]
         let new = Self::new(master_key, self_signing_key)?;
+
+        #[cfg(feature = "unstable-msc3917")]
+        let new = Self::new(master_key, self_signing_key, room_signing_key)?;
+
         let changed = new != *self;
 
         *self = new;
@@ -496,6 +565,8 @@ pub struct ReadOnlyOwnUserIdentity {
     master_key: MasterPubkey,
     self_signing_key: SelfSigningPubkey,
     user_signing_key: UserSigningPubkey,
+    #[cfg(feature = "unstable-msc3917")]
+    room_signing_key: RoomSigningPubkey,
     #[serde(
         serialize_with = "atomic_bool_serializer",
         deserialize_with = "atomic_bool_deserializer"
@@ -540,6 +611,7 @@ impl ReadOnlyOwnUserIdentity {
     ///
     /// Returns a `SignatureError` if the self signing key fails to be correctly
     /// verified by the given master key.
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub(crate) fn new(
         master_key: MasterPubkey,
         self_signing_key: SelfSigningPubkey,
@@ -557,6 +629,41 @@ impl ReadOnlyOwnUserIdentity {
         })
     }
 
+    /// Create a new own user identity with the given master, self signing, and
+    /// user signing key.
+    ///
+    /// # Arguments
+    ///
+    /// * `master_key` - The master key of the user identity.
+    ///
+    /// * `self_signing_key` - The self signing key of user identity.
+    ///
+    /// * `user_signing_key` - The user signing key of user identity.
+    ///
+    /// Returns a `SignatureError` if the self signing key fails to be correctly
+    /// verified by the given master key.
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) fn new(
+        master_key: MasterPubkey,
+        self_signing_key: SelfSigningPubkey,
+        user_signing_key: UserSigningPubkey,
+        room_signing_key: RoomSigningPubkey,
+    ) -> Result<Self, SignatureError> {
+        master_key.verify_subkey(&self_signing_key)?;
+        master_key.verify_subkey(&user_signing_key)?;
+        master_key.verify_subkey(&room_signing_key)?;
+
+        Ok(Self {
+            user_id: master_key.user_id().into(),
+            master_key,
+            self_signing_key,
+            user_signing_key,
+            room_signing_key,
+            verified: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    #[cfg(not(feature = "unstable-msc3917"))]
     #[cfg(test)]
     pub(crate) async fn from_private(identity: &crate::olm::PrivateCrossSigningIdentity) -> Self {
         let master_key = identity.master_key.lock().await.as_ref().unwrap().public_key.clone();
@@ -570,6 +677,27 @@ impl ReadOnlyOwnUserIdentity {
             master_key,
             self_signing_key,
             user_signing_key,
+            verified: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[cfg(feature = "unstable-msc3917")]
+    #[cfg(test)]
+    pub(crate) async fn from_private(identity: &crate::olm::PrivateCrossSigningIdentity) -> Self {
+        let master_key = identity.master_key.lock().await.as_ref().unwrap().public_key.clone();
+        let self_signing_key =
+            identity.self_signing_key.lock().await.as_ref().unwrap().public_key.clone();
+        let user_signing_key =
+            identity.user_signing_key.lock().await.as_ref().unwrap().public_key.clone();
+        let room_signing_key =
+            identity.room_signing_key.lock().await.as_ref().unwrap().public_key.clone();
+
+        Self {
+            user_id: identity.user_id().into(),
+            master_key,
+            self_signing_key,
+            user_signing_key,
+            room_signing_key,
             verified: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -592,6 +720,12 @@ impl ReadOnlyOwnUserIdentity {
     /// Get the public user-signing key of the identity.
     pub fn user_signing_key(&self) -> &UserSigningPubkey {
         &self.user_signing_key
+    }
+
+    /// Get the public room-signing key of the identity.
+    #[cfg(feature = "unstable-msc3917")]
+    pub fn room_signing_key(&self) -> &RoomSigningPubkey {
+        &self.room_signing_key
     }
 
     /// Check if the given identity has been signed by this identity.
@@ -665,6 +799,7 @@ impl ReadOnlyOwnUserIdentity {
         master_key: MasterPubkey,
         self_signing_key: SelfSigningPubkey,
         user_signing_key: UserSigningPubkey,
+        #[cfg(feature = "unstable-msc3917")] room_signing_key: RoomSigningPubkey,
     ) -> Result<bool, SignatureError> {
         master_key.verify_subkey(&self_signing_key)?;
         master_key.verify_subkey(&user_signing_key)?;
@@ -673,6 +808,12 @@ impl ReadOnlyOwnUserIdentity {
 
         self.self_signing_key = self_signing_key;
         self.user_signing_key = user_signing_key;
+
+        #[cfg(feature = "unstable-msc3917")]
+        {
+            master_key.verify_subkey(&room_signing_key)?;
+            self.room_signing_key = room_signing_key;
+        }
 
         if self.master_key != master_key {
             self.verified.store(false, Ordering::SeqCst);
@@ -726,6 +867,7 @@ pub(crate) mod testing {
     }
 
     /// Generate ReadOnlyOwnUserIdentity from KeyQueryResponse for testing
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub fn own_identity(response: &KeyQueryResponse) -> ReadOnlyOwnUserIdentity {
         let user_id = user_id!("@example:localhost");
 
@@ -744,6 +886,29 @@ pub(crate) mod testing {
         .unwrap()
     }
 
+    /// Generate ReadOnlyOwnUserIdentity from KeyQueryResponse for testing
+    #[cfg(feature = "unstable-msc3917")]
+    pub fn own_identity(response: &KeyQueryResponse) -> ReadOnlyOwnUserIdentity {
+        let user_id = user_id!("@example:localhost");
+
+        let master_key: CrossSigningKey =
+            response.master_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let user_signing: CrossSigningKey =
+            response.user_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let self_signing: CrossSigningKey =
+            response.self_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let room_signing: CrossSigningKey =
+            response.room_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+
+        ReadOnlyOwnUserIdentity::new(
+            master_key.try_into().unwrap(),
+            self_signing.try_into().unwrap(),
+            user_signing.try_into().unwrap(),
+            room_signing.try_into().unwrap(),
+        )
+        .unwrap()
+    }
+
     /// Generate default own identity for tests
     pub fn get_own_identity() -> ReadOnlyOwnUserIdentity {
         own_identity(&own_key_query())
@@ -757,6 +922,7 @@ pub(crate) mod testing {
     }
 
     /// Generate default other identify for tests
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub fn get_other_identity() -> ReadOnlyUserIdentity {
         let user_id = user_id!("@example2:localhost");
         let response = other_key_query();
@@ -768,6 +934,27 @@ pub(crate) mod testing {
 
         ReadOnlyUserIdentity::new(master_key.try_into().unwrap(), self_signing.try_into().unwrap())
             .unwrap()
+    }
+
+    /// Generate default other identify for tests
+    #[cfg(feature = "unstable-msc3917")]
+    pub fn get_other_identity() -> ReadOnlyUserIdentity {
+        let user_id = user_id!("@example2:localhost");
+        let response = other_key_query();
+
+        let master_key: CrossSigningKey =
+            response.master_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let self_signing: CrossSigningKey =
+            response.self_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let room_signing: CrossSigningKey =
+            response.room_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+
+        ReadOnlyUserIdentity::new(
+            master_key.try_into().unwrap(),
+            self_signing.try_into().unwrap(),
+            room_signing.try_into().unwrap(),
+        )
+        .unwrap()
     }
 }
 
@@ -785,6 +972,8 @@ pub(crate) mod tests {
         testing::{device, get_other_identity, get_own_identity},
         ReadOnlyOwnUserIdentity, ReadOnlyUserIdentities,
     };
+    #[cfg(feature = "unstable-msc3917")]
+    use crate::types::RoomSigningPubkey;
     use crate::{
         identities::{manager::testing::own_key_query, Device},
         olm::{Account, PrivateCrossSigningIdentity},
@@ -793,6 +982,7 @@ pub(crate) mod tests {
         verification::VerificationMachine,
     };
 
+    #[cfg(not(feature = "unstable-msc3917"))]
     #[test]
     fn own_identity_create() {
         let user_id = user_id!("@example:localhost");
@@ -813,6 +1003,31 @@ pub(crate) mod tests {
         .unwrap();
     }
 
+    #[cfg(feature = "unstable-msc3917")]
+    #[test]
+    fn own_identity_create() {
+        let user_id = user_id!("@example:localhost");
+        let response = own_key_query();
+
+        let master_key: CrossSigningKey =
+            response.master_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let user_signing: CrossSigningKey =
+            response.user_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let self_signing: CrossSigningKey =
+            response.self_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let room_signing: CrossSigningKey =
+            response.room_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+
+        ReadOnlyOwnUserIdentity::new(
+            master_key.try_into().unwrap(),
+            self_signing.try_into().unwrap(),
+            user_signing.try_into().unwrap(),
+            room_signing.try_into().unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[cfg(not(feature = "unstable-msc3917"))]
     #[test]
     fn own_identity_partial_equality() {
         let user_id = user_id!("@example:localhost");
@@ -839,6 +1054,44 @@ pub(crate) mod tests {
             master_key_updated_signature.try_into().unwrap(),
             self_signing.try_into().unwrap(),
             user_signing.try_into().unwrap(),
+        )
+        .unwrap();
+
+        assert_ne!(identity, updated_identity);
+        assert_eq!(identity.master_key(), updated_identity.master_key());
+    }
+
+    #[cfg(feature = "unstable-msc3917")]
+    #[test]
+    fn own_identity_partial_equality() {
+        let user_id = user_id!("@example:localhost");
+        let response = own_key_query();
+
+        let master_key: CrossSigningKey =
+            response.master_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let user_signing: CrossSigningKey =
+            response.user_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let self_signing: CrossSigningKey =
+            response.self_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+        let room_signing: CrossSigningKey =
+            response.room_signing_keys.get(user_id).unwrap().deserialize_as().unwrap();
+
+        let identity = ReadOnlyOwnUserIdentity::new(
+            master_key.clone().try_into().unwrap(),
+            self_signing.clone().try_into().unwrap(),
+            user_signing.clone().try_into().unwrap(),
+            room_signing.clone().try_into().unwrap(),
+        )
+        .unwrap();
+
+        let mut master_key_updated_signature = master_key.clone();
+        master_key_updated_signature.signatures = Signatures::new();
+
+        let updated_identity = ReadOnlyOwnUserIdentity::new(
+            master_key_updated_signature.try_into().unwrap(),
+            self_signing.try_into().unwrap(),
+            user_signing.try_into().unwrap(),
+            room_signing.try_into().unwrap(),
         )
         .unwrap();
 
@@ -930,6 +1183,7 @@ pub(crate) mod tests {
     /// Test that `CrossSigningKey` instances without a correct `usage` cannot
     /// be deserialized into high-level structs representing the MSK, SSK
     /// and USK.
+    #[cfg(not(feature = "unstable-msc3917"))]
     #[test]
     fn cannot_instantiate_keys_with_incorrect_usage() {
         let user_id = user_id!("@example:localhost");
@@ -979,6 +1233,77 @@ pub(crate) mod tests {
         );
         assert_matches!(
             serde_json::from_value::<UserSigningPubkey>(user_signing_key_json.clone()),
+            Err(_)
+        );
+    }
+
+    /// Test that `CrossSigningKey` instances without a correct `usage` cannot
+    /// be deserialized into high-level structs representing the MSK, SSK
+    /// and USK.
+    #[cfg(feature = "unstable-msc3917")]
+    #[test]
+    fn cannot_instantiate_keys_with_incorrect_usage() {
+        let user_id = user_id!("@example:localhost");
+        let response = own_key_query();
+
+        let master_key = response.master_keys.get(user_id).unwrap();
+        let mut master_key_json: Value = master_key.deserialize_as().unwrap();
+        let self_signing_key = response.self_signing_keys.get(user_id).unwrap();
+        let mut self_signing_key_json: Value = self_signing_key.deserialize_as().unwrap();
+        let user_signing_key = response.user_signing_keys.get(user_id).unwrap();
+        let mut user_signing_key_json: Value = user_signing_key.deserialize_as().unwrap();
+        let room_signing_key = response.room_signing_keys.get(user_id).unwrap();
+        let mut room_signing_key_json: Value = room_signing_key.deserialize_as().unwrap();
+
+        // Delete the usages.
+        let usage = master_key_json.get_mut("usage").unwrap();
+        *usage = json!([]);
+        let usage = self_signing_key_json.get_mut("usage").unwrap();
+        *usage = json!([]);
+        let usage = user_signing_key_json.get_mut("usage").unwrap();
+        *usage = json!([]);
+        let usage = room_signing_key_json.get_mut("usage").unwrap();
+        *usage = json!([]);
+
+        // It should now be impossible to deserialize the keys into their corresponding
+        // high-level cross-signing key structs.
+        assert_matches!(serde_json::from_value::<MasterPubkey>(master_key_json.clone()), Err(_));
+        assert_matches!(
+            serde_json::from_value::<SelfSigningPubkey>(self_signing_key_json.clone()),
+            Err(_)
+        );
+        assert_matches!(
+            serde_json::from_value::<UserSigningPubkey>(user_signing_key_json.clone()),
+            Err(_)
+        );
+        assert_matches!(
+            serde_json::from_value::<RoomSigningPubkey>(room_signing_key_json.clone()),
+            Err(_)
+        );
+
+        // Add additional usages.
+        let usage = master_key_json.get_mut("usage").unwrap();
+        *usage = json!(["master", "user_signing"]);
+        let usage = self_signing_key_json.get_mut("usage").unwrap();
+        *usage = json!(["self_signing", "user_signing"]);
+        let usage = user_signing_key_json.get_mut("usage").unwrap();
+        *usage = json!(["user_signing", "self_signing"]);
+        let usage = room_signing_key_json.get_mut("usage").unwrap();
+        *usage = json!(["room_signing", "self_signing"]);
+
+        // It should still be impossible to deserialize the keys into their
+        // corresponding high-level cross-signing key structs.
+        assert_matches!(serde_json::from_value::<MasterPubkey>(master_key_json.clone()), Err(_));
+        assert_matches!(
+            serde_json::from_value::<SelfSigningPubkey>(self_signing_key_json.clone()),
+            Err(_)
+        );
+        assert_matches!(
+            serde_json::from_value::<UserSigningPubkey>(user_signing_key_json.clone()),
+            Err(_)
+        );
+        assert_matches!(
+            serde_json::from_value::<RoomSigningPubkey>(room_signing_key_json.clone()),
             Err(_)
         );
     }

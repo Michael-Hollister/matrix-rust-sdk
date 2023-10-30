@@ -28,6 +28,8 @@ use ruma::{
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, trace, warn};
 
+#[cfg(feature = "unstable-msc3917")]
+use crate::types::RoomSigningPubkey;
 use crate::{
     error::OlmResult,
     identities::{
@@ -426,6 +428,7 @@ impl IdentityManager {
         response: &KeysQueryResponse,
         master_key: MasterPubkey,
         self_signing: SelfSigningPubkey,
+        #[cfg(feature = "unstable-msc3917")] room_signing: RoomSigningPubkey,
         i: ReadOnlyUserIdentities,
         changed_private_identity: &mut Option<PrivateCrossSigningIdentity>,
     ) -> Result<IdentityUpdateResult, SignatureError> {
@@ -445,8 +448,17 @@ impl IdentityManager {
 
                         Err(SignatureError::UserIdMismatch)
                     } else {
+                        #[cfg(not(feature = "unstable-msc3917"))]
                         let has_changed =
                             identity.update(master_key, self_signing, user_signing)?;
+
+                        #[cfg(feature = "unstable-msc3917")]
+                        let has_changed = identity.update(
+                            master_key,
+                            self_signing,
+                            user_signing,
+                            room_signing,
+                        )?;
 
                         *changed_private_identity = self.check_private_identity(&identity).await;
 
@@ -465,7 +477,11 @@ impl IdentityManager {
                 }
             }
             ReadOnlyUserIdentities::Other(mut identity) => {
+                #[cfg(not(feature = "unstable-msc3917"))]
                 let has_changed = identity.update(master_key, self_signing)?;
+
+                #[cfg(feature = "unstable-msc3917")]
+                let has_changed = identity.update(master_key, self_signing, room_signing)?;
 
                 if has_changed {
                     Ok(IdentityUpdateResult::Updated(identity.into()))
@@ -481,6 +497,7 @@ impl IdentityManager {
         response: &KeysQueryResponse,
         master_key: MasterPubkey,
         self_signing: SelfSigningPubkey,
+        #[cfg(feature = "unstable-msc3917")] room_signing: RoomSigningPubkey,
         changed_private_identity: &mut Option<PrivateCrossSigningIdentity>,
     ) -> Result<ReadOnlyUserIdentities, SignatureError> {
         if master_key.user_id() == self.user_id() {
@@ -497,8 +514,17 @@ impl IdentityManager {
                     );
                     Err(SignatureError::UserIdMismatch)
                 } else {
+                    #[cfg(not(feature = "unstable-msc3917"))]
                     let identity =
                         ReadOnlyOwnUserIdentity::new(master_key, self_signing, user_signing)?;
+
+                    #[cfg(feature = "unstable-msc3917")]
+                    let identity = ReadOnlyOwnUserIdentity::new(
+                        master_key,
+                        self_signing,
+                        user_signing,
+                        room_signing,
+                    )?;
 
                     *changed_private_identity = self.check_private_identity(&identity).await;
 
@@ -513,7 +539,12 @@ impl IdentityManager {
                 Err(SignatureError::MissingSigningKey)
             }
         } else {
+            #[cfg(not(feature = "unstable-msc3917"))]
             let identity = ReadOnlyUserIdentity::new(master_key, self_signing)?;
+
+            #[cfg(feature = "unstable-msc3917")]
+            let identity = ReadOnlyUserIdentity::new(master_key, self_signing, room_signing)?;
+
             Ok(identity.into())
         }
     }
@@ -524,6 +555,7 @@ impl IdentityManager {
     /// Each user identity *must* at least contain a master and self-signing
     /// key. Our own identity, in addition to those two, also contains a
     /// user-signing key.
+    #[cfg(not(feature = "unstable-msc3917"))]
     fn get_minimal_set_of_keys(
         master_key: &Raw<CrossSigningKey>,
         response: &KeysQueryResponse,
@@ -551,6 +583,49 @@ impl IdentityManager {
         }
     }
 
+    /// Try to deserialize the the master key and self-signing key of a
+    /// identity.
+    ///
+    /// Each user identity *must* at least contain a master and self-signing
+    /// key. Our own identity, in addition to those two, also contains a
+    /// user-signing key.
+    #[cfg(feature = "unstable-msc3917")]
+    fn get_minimal_set_of_keys(
+        master_key: &Raw<CrossSigningKey>,
+        response: &KeysQueryResponse,
+    ) -> Option<(MasterPubkey, SelfSigningPubkey, RoomSigningPubkey)> {
+        match master_key.deserialize_as::<MasterPubkey>() {
+            Ok(master_key) => {
+                if let Some(self_signing) = response
+                    .self_signing_keys
+                    .get(master_key.user_id())
+                    .and_then(|k| k.deserialize_as::<SelfSigningPubkey>().ok())
+                {
+                    if let Some(room_signing) = response
+                        .room_signing_keys
+                        .get(master_key.user_id())
+                        .and_then(|k| k.deserialize_as::<RoomSigningPubkey>().ok())
+                    {
+                        Some((master_key, self_signing, room_signing))
+                    } else {
+                        warn!("A user identity didn't contain a room signing pubkey or the key was invalid");
+                        None
+                    }
+                } else {
+                    warn!("A user identity didn't contain a self signing pubkey or the key was invalid");
+                    None
+                }
+            }
+            Err(e) => {
+                warn!(
+                    error = ?e,
+                    "Couldn't update or create new user identity"
+                );
+                None
+            }
+        }
+    }
+
     #[instrument(skip_all, fields(user_id))]
     async fn update_or_create_identity(
         &self,
@@ -560,10 +635,12 @@ impl IdentityManager {
         user_id: &UserId,
         master_key: MasterPubkey,
         self_signing: SelfSigningPubkey,
+        #[cfg(feature = "unstable-msc3917")] room_signing: RoomSigningPubkey,
     ) -> StoreResult<()> {
         if master_key.user_id() != user_id || self_signing.user_id() != user_id {
             warn!(?user_id, "User ID mismatch in one of the cross signing keys",);
         } else if let Some(i) = self.store.get_user_identity(user_id).await? {
+            #[cfg(not(feature = "unstable-msc3917"))]
             match self
                 .handle_changed_identity(
                     response,
@@ -586,9 +663,55 @@ impl IdentityManager {
                     warn!(error = ?e, "Couldn't update an existing user identity");
                 }
             }
+
+            #[cfg(feature = "unstable-msc3917")]
+            match self
+                .handle_changed_identity(
+                    response,
+                    master_key,
+                    self_signing,
+                    room_signing,
+                    i,
+                    changed_private_identity,
+                )
+                .await
+            {
+                Ok(IdentityUpdateResult::Updated(identity)) => {
+                    trace!(?identity, "Updated a user identity");
+                    changes.changed.push(identity);
+                }
+                Ok(IdentityUpdateResult::Unchanged(identity)) => {
+                    trace!(?identity, "Received an unchanged user identity");
+                    changes.unchanged.push(identity);
+                }
+                Err(e) => {
+                    warn!(error = ?e, "Couldn't update an existing user identity");
+                }
+            }
         } else {
+            #[cfg(not(feature = "unstable-msc3917"))]
             match self
                 .handle_new_identity(response, master_key, self_signing, changed_private_identity)
+                .await
+            {
+                Ok(identity) => {
+                    trace!(?identity, "Created new user identity");
+                    changes.new.push(identity);
+                }
+                Err(e) => {
+                    warn!(error = ?e, "Couldn't create new user identity");
+                }
+            }
+
+            #[cfg(feature = "unstable-msc3917")]
+            match self
+                .handle_new_identity(
+                    response,
+                    master_key,
+                    self_signing,
+                    room_signing,
+                    changed_private_identity,
+                )
                 .await
             {
                 Ok(identity) => {
@@ -622,7 +745,15 @@ impl IdentityManager {
         for (user_id, master_key) in &response.master_keys {
             // Get the master and self-signing key for each identity, those are required for
             // every user identity type, if we don't have those we skip over.
+            #[cfg(not(feature = "unstable-msc3917"))]
             let Some((master_key, self_signing)) =
+                Self::get_minimal_set_of_keys(master_key.cast_ref(), response)
+            else {
+                continue;
+            };
+
+            #[cfg(feature = "unstable-msc3917")]
+            let Some((master_key, self_signing, room_signing)) =
                 Self::get_minimal_set_of_keys(master_key.cast_ref(), response)
             else {
                 continue;
@@ -635,6 +766,8 @@ impl IdentityManager {
                 user_id,
                 master_key,
                 self_signing,
+                #[cfg(feature = "unstable-msc3917")]
+                room_signing,
             )
             .await?;
         }

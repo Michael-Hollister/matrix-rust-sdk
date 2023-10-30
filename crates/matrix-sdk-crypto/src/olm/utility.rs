@@ -12,6 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "unstable-msc3917")]
+use ruma::{
+    events::{
+        room::{
+            create::RoomCreateEventContent, join_rules::RoomJoinRulesEventContent,
+            member::RoomMemberEventContent, third_party_invite::RoomThirdPartyInviteEventContent,
+            tombstone::RoomTombstoneEventContent,
+        },
+        space::child::SpaceChildEventContent,
+    },
+    CanonicalJsonValue, DeviceKeyAlgorithm, DeviceKeyId, UserId,
+};
+#[cfg(not(feature = "unstable-msc3917"))]
 use ruma::{CanonicalJsonValue, DeviceKeyAlgorithm, DeviceKeyId, UserId};
 use serde::Serialize;
 use serde_json::Value;
@@ -138,6 +151,21 @@ impl VerifyJson for Ed25519PublicKey {
 
         verify_signature(*self, user_id, key_id, signatures, canonical_json)
     }
+
+    // fn verify_canonicalized_json_with_ed25519_key(
+    // #[cfg(feature = "unstable-msc3917")]
+    // fn verify_json2(
+    //     &self,
+    //     user_id: &UserId,
+    //     key_id: &DeviceKeyId,
+    //     signed_object: &impl SignedJsonObject,
+    // ) -> Result<(), SignatureError> { if key_id.algorithm() !=
+    //   DeviceKeyAlgorithm::Ed25519 { return
+    //   Err(SignatureError::UnsupportedAlgorithm); }
+
+    //     let canonicalized = signed_object.to_canonical_json()?;
+    //     verify_signature2(*self, user_id, key_id, signed_object.signatures(),
+    // &canonicalized) }
 }
 
 fn verify_signature(
@@ -158,6 +186,24 @@ fn verify_signature(
         Err(_) => Err(SignatureError::InvalidSignature),
     }
 }
+
+// #[cfg(feature = "unstable-msc3917")]
+// fn verify_signature2(
+//     public_key: Ed25519PublicKey,
+//     user_id: &UserId,
+//     key_id: &DeviceKeyId,
+//     signatures: &Signatures,
+//     canonical_json: &str,
+// ) -> Result<(), SignatureError> { let s = signatures .get(user_id)
+//   .and_then(|m| m.get(key_id)) .ok_or(SignatureError::NoSignatureFound)?;
+
+//     match s {
+//         Ok(Signature::Ed25519(s)) =>
+// Ok(public_key.verify(canonical_json.as_bytes(), s)?),
+//         Ok(Signature::Other(_)) => Err(SignatureError::UnsupportedAlgorithm),
+//         Err(_) => Err(SignatureError::InvalidSignature),
+//     }
+// }
 
 /// A trait for Matrix objects that we can canonicalize, sign and verify
 /// signatures for, as described by the [spec].
@@ -198,6 +244,97 @@ impl SignedJsonObject for crate::types::MegolmV1AuthData {
         &self.signatures
     }
 }
+
+#[cfg(feature = "unstable-msc3917")]
+impl SignedJsonObject for RoomCreateEventContent {
+    fn signatures(&self) -> &Signatures {
+        // redo proper unwraping
+        let val = serde_json::to_value(self.signatures.as_ref().unwrap()).unwrap();
+        let raw = ruma::serde::Raw::new(&val).unwrap();
+        &raw.deserialize_as().unwrap()
+    }
+}
+
+#[cfg(feature = "unstable-msc3917")]
+impl SignedJsonObject for RoomMemberEventContent {
+    fn signatures(&self) -> &Signatures {
+        // redo proper unwraping
+        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+        let raw = ruma::serde::Raw::new(&val).unwrap();
+        &raw.deserialize_as().unwrap()
+    }
+}
+
+#[cfg(feature = "unstable-msc3917")]
+impl SignedJsonObject for RoomJoinRulesEventContent {
+    fn signatures(&self) -> &Signatures {
+        // redo proper unwraping
+        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+        let raw = ruma::serde::Raw::new(&val).unwrap();
+        &raw.deserialize_as().unwrap()
+    }
+}
+
+#[cfg(feature = "unstable-msc3917")]
+impl SignedJsonObject for RoomThirdPartyInviteEventContent {
+    fn signatures(&self) -> &Signatures {
+        // redo proper unwraping
+        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+        let raw = ruma::serde::Raw::new(&val).unwrap();
+        &raw.deserialize_as().unwrap()
+    }
+}
+
+#[cfg(feature = "unstable-msc3917")]
+impl SignedJsonObject for SpaceChildEventContent {
+    fn signatures(&self) -> &Signatures {
+        // redo proper unwraping
+        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+        let raw = ruma::serde::Raw::new(&val).unwrap();
+        &raw.deserialize_as().unwrap()
+    }
+}
+
+#[cfg(feature = "unstable-msc3917")]
+impl SignedJsonObject for RoomTombstoneEventContent {
+    fn signatures(&self) -> &Signatures {
+        // redo proper unwraping
+        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+        let raw = ruma::serde::Raw::new(&val).unwrap();
+        &raw.deserialize_as().unwrap()
+    }
+}
+
+// #[cfg(feature = "unstable-msc3917")]
+// impl SignedJsonObject for RoomCreateEventContent {
+//     fn signatures(&self) -> &crate::types::StateEventSignatures {
+//         let test = self.signatures.unwrap_or_default();
+
+//         // let temp = Signatures::new();
+
+//         // for (signer, signatures) in self.signatures {
+//         //     for (key_id, signature) in signatures {
+//         //         // let temp2 = ruma::OwnedDeviceKeyId
+//         //         temp.add_signature(signer, key_id, signature);
+//         //     }
+//         // }
+
+//         // &temp
+
+//         // assert_eq!(
+//         //     <&DeviceKeyId>::try_from("ed25519:JLAFKJWSCS")
+//         //         .expect("Failed to create device key ID."),
+//         //     "ed25519:JLAFKJWSCS"
+//         // );
+
+//         // &self.signatures
+
+//         //&BTreeMap<OwnedUserId, BTreeMap<OwnedKeyId<SigningKeyAlgorithm,
+// KeyName>,         //&BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceKeyId,
+// Result<Signature, InvalidSignature>>>
+
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

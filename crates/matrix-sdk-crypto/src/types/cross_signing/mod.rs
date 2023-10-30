@@ -21,11 +21,15 @@
 
 mod common;
 mod master;
+#[cfg(feature = "unstable-msc3917")]
+mod room_signing;
 mod self_signing;
 mod user_signing;
 
 pub use common::*;
 pub use master::*;
+#[cfg(feature = "unstable-msc3917")]
+pub use room_signing::*;
 pub use self_signing::*;
 pub use user_signing::*;
 
@@ -56,6 +60,8 @@ macro_rules! impl_partial_eq {
 impl_partial_eq!(MasterPubkey);
 impl_partial_eq!(SelfSigningPubkey);
 impl_partial_eq!(UserSigningPubkey);
+#[cfg(feature = "unstable-msc3917")]
+impl_partial_eq!(RoomSigningPubkey);
 
 #[cfg(test)]
 mod tests {

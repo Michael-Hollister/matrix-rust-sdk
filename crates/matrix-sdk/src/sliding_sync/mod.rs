@@ -330,7 +330,17 @@ impl SlidingSync {
 
         #[cfg(feature = "e2e-encryption")]
         if self.is_e2ee_enabled() {
-            response_processor.handle_encryption(&sliding_sync_response.extensions).await?
+            response_processor
+                .handle_encryption(
+                    &sliding_sync_response.extensions,
+                    #[cfg(feature = "unstable-msc3917")]
+                    &sliding_sync_response
+                        .rooms
+                        .iter()
+                        .map(|(id, room)| (id.to_owned(), &room.required_state))
+                        .collect(),
+                )
+                .await?
         }
 
         // Only handle the room's subsection of the response, if this sliding sync was

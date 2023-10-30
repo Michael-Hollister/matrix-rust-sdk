@@ -276,6 +276,8 @@ async fn migrate_data(
             data.cross_signing.master_key.as_deref(),
             data.cross_signing.self_signing_key.as_deref(),
             data.cross_signing.user_signing_key.as_deref(),
+            #[cfg(feature = "unstable-msc3917")]
+            data.cross_signing.room_signing_key.as_deref(),
         )
         .await?;
 
@@ -801,6 +803,8 @@ impl From<CrossSigningKeyExport> for matrix_sdk_crypto::CrossSigningKeyExport {
             master_key: e.master_key,
             self_signing_key: e.self_signing_key,
             user_signing_key: e.user_signing_key,
+            #[cfg(feature = "unstable-msc3917")]
+            room_signing_key: e.room_signing_key,
         }
     }
 }
