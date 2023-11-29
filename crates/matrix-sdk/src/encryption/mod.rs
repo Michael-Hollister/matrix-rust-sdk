@@ -787,11 +787,21 @@ impl Encryption {
 
         let (request, signature_request) = olm.bootstrap_cross_signing(false).await?;
 
+        #[cfg(not(feature = "unstable-msc3917"))]
         let request = assign!(UploadSigningKeysRequest::new(), {
             auth: auth_data,
             master_key: request.master_key.map(|c| c.to_raw()),
             self_signing_key: request.self_signing_key.map(|c| c.to_raw()),
             user_signing_key: request.user_signing_key.map(|c| c.to_raw()),
+        });
+
+        #[cfg(feature = "unstable-msc3917")]
+        let request = assign!(UploadSigningKeysRequest::new(), {
+            auth: auth_data,
+            master_key: request.master_key.map(|c| c.to_raw()),
+            self_signing_key: request.self_signing_key.map(|c| c.to_raw()),
+            user_signing_key: request.user_signing_key.map(|c| c.to_raw()),
+            room_signing_key: request.room_signing_key.map(|c| c.to_raw()),
         });
 
         self.client.send(request, None).await?;

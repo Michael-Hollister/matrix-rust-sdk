@@ -768,6 +768,64 @@ impl GroupSessionManager {
         let encryption_settings = encryption_settings.into();
         let mut changes = Changes::default();
 
+
+        #[cfg(feature = "unstable-msc3917")]
+        let blacklisted_members: BTreeMap<ruma::OwnedRoomId, BTreeSet<OwnedUserId>> = self.store.get_value("blacklisted_members").await.unwrap_or_default().unwrap_or_default();
+
+        // #[cfg(feature = "unstable-msc3917")]
+        // let mut users: BTreeSet<&UserId> = users.collect();
+
+        // //
+        // for u in users.clone() {
+        //     println!("STARTING USERS {:?}", u);
+        // }
+
+
+        #[cfg(feature = "unstable-msc3917")]
+        let users: BTreeSet<&UserId> = users.filter(|user| {
+            !blacklisted_members.get(room_id).is_some_and(|s| s.contains(*user))
+            // if let Some(room_users) = blacklisted_members.get(room_id) {
+            //     return !room_users.contains(*user);
+            // }
+
+            // true
+
+            // !blacklisted_members.get(room_id).is_some_and(|s| s.contains(user))
+            // if blacklisted_members.get(room_id).is_some_and(|s| s.contains(*user)) {
+            //     println!("REMOVED USER!!!!!!!!!!");
+
+            //     // users.remove(user);
+            // }
+            // true
+        }).collect();
+
+        // for user in users.clone() {
+
+
+        // }
+
+        #[cfg(feature = "unstable-msc3917")]
+        if users.is_empty() {
+            println!("NOT SHARING SESSION");
+            // create new error?
+            return Err(OlmError::EventError(EventError::NotAnObject));
+        }
+
+        //
+        // println!("REMAINING USERS AFTER FILTER {:?}", users);
+        // // for u in users.clone() {
+        // //     println!("REMAINING USERS {:?}", u);
+        // // }
+
+
+        // for u in users.clone().into_iter() {
+        //     println!("FINAL ITER???? {:?}", users);
+        // }
+
+
+        #[cfg(feature = "unstable-msc3917")]
+        let users = users.into_iter();
+
         // Try to get an existing session or create a new one.
         let (outbound, inbound) =
             self.get_or_create_outbound_session(room_id, encryption_settings.clone()).await?;

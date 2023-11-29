@@ -16,7 +16,9 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = []
+# default = []
+# temp for intilisense
+default = ["unstable-msc3917"]
 e2e-encryption = ["dep:matrix-sdk-crypto"]
 js = ["matrix-sdk-common/js", "matrix-sdk-crypto?/js", "ruma/js", "matrix-sdk-store-encryption/js"]
 qrcode = ["matrix-sdk-crypto?/qrcode"]

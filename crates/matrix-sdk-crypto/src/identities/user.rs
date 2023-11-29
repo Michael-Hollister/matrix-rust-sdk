@@ -737,11 +737,38 @@ impl ReadOnlyOwnUserIdentity {
     ///
     /// Returns an empty result if the signature check succeeded, otherwise a
     /// SignatureError indicating why the check failed.
+    #[cfg(not(feature = "unstable-msc3917"))]
     pub(crate) fn is_identity_signed(
         &self,
         identity: &ReadOnlyUserIdentity,
     ) -> Result<(), SignatureError> {
         self.user_signing_key.verify_master_key(&identity.master_key)
+    }
+
+    /// Check if the given identity has been signed by this identity.
+    ///
+    /// # Arguments
+    ///
+    /// * `identity` - The identity of another user that we want to check if
+    /// it's has been signed.
+    ///
+    /// Returns an empty result if the signature check succeeded, otherwise a
+    /// SignatureError indicating why the check failed.
+    #[cfg(feature = "unstable-msc3917")]
+    pub(crate) fn is_identity_signed(
+        &self,
+        identity: &ReadOnlyUserIdentity,
+    ) -> Result<(), (Option<SignatureError>, Option<SignatureError>)> {
+        let user_verify_result = self.user_signing_key.verify_master_key(&identity.master_key);
+        let room_verify_result = self.room_signing_key.verify_master_key(&identity.master_key);
+
+        if user_verify_result.is_ok() && room_verify_result.is_ok() {
+            Ok(())
+        }
+        else
+        {
+            Err((user_verify_result.is_err().then_some(user_verify_result.unwrap_err()), room_verify_result.is_err().then_some(room_verify_result.unwrap_err())))
+        }
     }
 
     /// Check if the given device has been signed by this identity.

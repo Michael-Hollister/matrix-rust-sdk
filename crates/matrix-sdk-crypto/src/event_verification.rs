@@ -45,12 +45,12 @@ use vodozemac::Ed25519PublicKey;
 use crate::{
     error::OlmResult,
     olm::{ShareInfo, VerifyJson},
-    store::{Changes, StoreTransaction},
+    store::{Changes, StoreTransaction, RoomMemberVerificationMembershipInfo},
     types::{
         events::room_key_withheld::WithheldCode, CrossSigningKey, MasterPubkey, RoomSigningPubkey,
         Signatures, SigningKey, SigningKeys,
     },
-    EventError, OlmError, OlmMachine, UserIdentities,
+    EventError, OlmError, OlmMachine, UserIdentities, SignatureError,
 };
 
 impl OlmMachine {
@@ -63,23 +63,24 @@ impl OlmMachine {
         room_events: &BTreeMap<OwnedRoomId, &Vec<Raw<AnySyncStateEvent>>>,
     ) -> OlmResult<()> {
         // update to correctly handle this
-        changes.verified_events =
-            self.store().get_value("verified_events").await.unwrap_or_default().unwrap_or_default();
+        changes.room_member_verification.verified_events =
+            self.store().get_value("rmv_verified_events").await.unwrap_or_default().unwrap_or_default();
         // changes.unverified_events =
         // self.store().get_value("unverified_events").await.unwrap_or_default().
         // unwrap_or_default();
-        changes.unverified_events = BTreeMap::default();
-        changes.missing_identities = self
+        changes.room_member_verification.unverified_events = BTreeMap::default();
+        changes.room_member_verification.missing_identities = self
             .store()
-            .get_value("missing_identities")
+            .get_value("rmv_missing_identities")
             .await
             .unwrap_or_default()
             .unwrap_or_default();
+        changes.room_member_verification.blacklisted_members = self.store().get_value("rmv_blacklisted_members").await.unwrap_or_default().unwrap_or_default();
 
         // Prevents cloning event data, will be merged with changes later
         let unverified_events: BTreeMap<OwnedRoomId, Vec<Raw<AnySyncStateEvent>>> = self
             .store()
-            .get_value("unverified_events")
+            .get_value("rmv_unverified_events")
             .await
             .unwrap_or_default()
             .unwrap_or_default();
@@ -92,12 +93,17 @@ impl OlmMachine {
             .await?;
         }
 
-        changes.unverified_events.extend(unverified_events);
+        changes.room_member_verification.unverified_events.extend(unverified_events);
         self.verify_events(changes, room_events).await?;
 
+        // save changes in main method later (in save_changes method)?
+        self.store().set_value("rmv_verified_events", &changes.room_member_verification.verified_events).await?;
+        self.store().set_value("rmv_unverified_events", &changes.room_member_verification.unverified_events).await?;
+        self.store().set_value("rmv_missing_identities", &changes.room_member_verification.missing_identities).await?;
+        self.store().set_value("rmv_blacklisted_members", &changes.room_member_verification.blacklisted_members).await?;
 
-        // save changes in main method later (in save_changes method)
-        // self.store().set_value("verified_events", &verified_events).await?;
+        // todo: add a return error list of failed verified event ids (and perhaps error info if needed)
+        //       clients need to handle actions like tombstoning which cannot be handled fully in crypto crate
 
         Ok(())
     }
@@ -131,6 +137,7 @@ impl OlmMachine {
                             // temp: note that events could be duplicated, though does not have
                             // effect on validation, only bloating the store
                             changes
+                                .room_member_verification
                                 .unverified_events
                                 .entry(room_id.to_owned())
                                 .or_default()
@@ -139,8 +146,8 @@ impl OlmMachine {
                         }
 
                         if let Some(sender_msk) = self.get_user_msk(&e.sender().to_owned()).await {
-                            if changes.missing_identities.contains(&e.sender().to_owned()) {
-                                changes.missing_identities.remove(&e.sender().to_owned());
+                            if changes.room_member_verification.missing_identities.contains(&e.sender().to_owned()) {
+                                changes.room_member_verification.missing_identities.remove(&e.sender().to_owned());
                             }
 
                             if e.event_type() == StateEventType::RoomCreate {
@@ -148,7 +155,7 @@ impl OlmMachine {
                                     .await?;
                             }
                             // Key being present in verified_events implies room id version >= V12
-                            else if changes.verified_events.contains_key(room_id) {
+                            else if changes.room_member_verification.verified_events.contains_key(room_id) {
                                 match e.event_type() {
                                     StateEventType::RoomJoinRules => self.verify_join_rules_event(changes, room_id, &sender_msk, event).await?,
                                     StateEventType::RoomMember => {
@@ -181,13 +188,8 @@ impl OlmMachine {
                             // Need to pause verification until we can fetch identity credentials
                             // from manager
                             new_missing_identities.insert(e.sender().to_owned());
-                            // temp: note that events could be duplicated, though does not have
-                            // effect on validation, only bloating the store
-                            changes
-                                .unverified_events
-                                .entry(room_id.to_owned())
-                                .or_default()
-                                .push(event.clone());
+
+                            self.add_missing_identity(changes, &e.sender().to_owned(), room_id, event);
                         }
                     }
                     Err(e) => {
@@ -198,25 +200,28 @@ impl OlmMachine {
             }
         }
 
-        changes.missing_identities.extend(new_missing_identities);
+        changes.room_member_verification.missing_identities.extend(new_missing_identities);
 
         Ok(())
     }
 
     /// docs tbd
+    fn add_missing_identity(&self, changes: &mut Changes, user_id: &OwnedUserId, room_id: &OwnedRoomId, event: &Raw<AnySyncStateEvent>) {
+        // Need to pause verification until we can fetch identity credentials from
+        // manager
+        changes.room_member_verification.missing_identities.insert(user_id.to_owned());
+        // temp: note that events could be duplicated, though does not have effect
+        // on validation, only bloating the store
+        changes
+            .room_member_verification
+            .unverified_events
+            .entry(room_id.to_owned())
+            .or_default()
+            .push(event.clone());
+    }
+
+    /// docs tbd
     async fn get_user_msk(&self, user_id: &OwnedUserId) -> Option<MasterPubkey> {
-        // let rrk_bytes: [u8; PUBLIC_KEY_LENGTH] =
-        // full_event.content.room_root_key.unwrap_or_default().as_bytes().try_into().
-        // unwrap_or([0; PUBLIC_KEY_LENGTH]);
-
-        // let rrk = match VerifyingKey::from_bytes(&rrk_bytes) {
-        //     Ok(k) => k,
-        //     Err(e) => {
-        //         // should be failure since room version is 12
-        //         return Ok(());
-        //     },
-        // };
-
         match self.get_identity(user_id, None).await {
             Ok(Some(UserIdentities::Own(identity))) => Some(identity.master_key().clone()),
             Ok(Some(UserIdentities::Other(identity))) => Some(identity.master_key().clone()),
@@ -247,10 +252,94 @@ impl OlmMachine {
         }
     }
 
+    /// docs tbd
+    fn verify_event_content(
+        &self,
+        sender_key: Ed25519PublicKey,
+        event: &Raw<AnySyncStateEvent>
+    ) -> bool {
+        // temp ruma compatibility
+        let json_str = event.json().to_string().replace("org.matrix.msc3917.v1.signatures", "signatures");
+        let updated_event = serde_json::from_str::<Raw<AnySyncStateEvent>>(json_str.as_str()).unwrap();
+
+        // only verify event's content, not full event
+        // match event.get_field::<ruma::CanonicalJsonObject>("content") {
+        match updated_event.get_field::<ruma::CanonicalJsonObject>("content") {
+            Ok(Some(content)) => {
+                let public_key = Base64::parse(sender_key.to_base64()).unwrap();
+
+                // panic!("VERIFY RESULT: {:?}", res);
+                return ruma::signatures::verify_state_event_content(public_key, &content).is_ok_and(|r| r == true);
+            },
+            Ok(None) | Err(_) => false,
+        }
+    }
+
+    /// docs tbd
+    // async fn withold_session(
+    //     &self,
+    //     user_id: &OwnedUserId,
+    //     room_id: &OwnedRoomId,
+    // ) -> OlmResult<()> {
+    //     // Should not withhold keys to ourself, although event verification failed
+    //     if user_id == self.user_id() {
+    //         return Ok(());
+    //     }
+
+    //     // revisit key witholding and edge/cases
+
+    //     // need to consider, if roomkey withheld only blacklists devices, what
+    //     // happens if new devices are added later?
+
+    //     // Note that this procedure specifically verifies that a particular MSK may
+    //     // legitimately belong in the room. Devices that
+    //     // claim to belong to a user, but are not signed by a Self-Signing Key
+    //     // signed by that particular MSK, must not be
+    //     // treated as belonging in the room.
+
+    //     // If clients are unable to verify a user's cause-of-membership event for a
+    //     // room, they may refuse to share cryptographic
+    //     // material in that room with that user.
+
+
+    //     // self.inner.group_session_manager.get_outbound_group_session(room_id)
+
+    //     // let outbound_session = self
+    //     //     .inner
+    //     //     .outbound_group_sessions
+    //     //     .get_with_id(session.room_id(), session.session_id())
+    //     //     .await;
+
+    //     // println!("Keys added, SO FAILED then????");
+
+    //     // if let Some(outbound) =
+    //     //     self.store().get_outbound_group_session(room_id).await?
+    //     // // if let Some(outbound) = self.inner.group_session_manager.get_outbound_group_session(room_id)
+    //     // // if let Some(outbound) = self.inner.key_request_machine.get_or_load(room_id).await
+    //     // {
+    //     //     let share_info = ShareInfo::new_withheld(WithheldCode::Unauthorised);
+
+    //     //     println!("Keys added, STARTING DEVICES?");
+    //     //     for device in
+    //     //         self.store().get_user_devices_filtered(&user_id).await?.devices()
+    //     //     {
+    //     //         println!("Keys added, but looks like session was already established?");
+    //     //         outbound
+    //     //             .shared_with_set
+    //     //             .write()
+    //     //             .unwrap()
+    //     //             .entry(device.user_id().to_owned())
+    //     //             .or_default()
+    //     //             .insert(device.device_id().to_owned(), share_info.clone());
+    //     //     }
+    //     // }
+
+    //     Ok(())
+    // }
+
     /// Docs tbd
     async fn verify_room_create_event(
         &self,
-        // verified_events: &mut BTreeMap<OwnedRoomId, BTreeSet<OwnedEventId>>,
         changes: &mut Changes,
         room_id: &OwnedRoomId,
         sender_msk: &MasterPubkey,
@@ -262,95 +351,85 @@ impl OlmMachine {
                     let full_event = sync_event.into_full_event(room_id.to_owned());
 
                     let sender = full_event.sender;
-                    let rrk = full_event.content.room_root_key.unwrap_or_default();
+                    let creator_key = full_event.content.to_owned().creator_key.unwrap_or_default();
+                    let rrk = match Ed25519PublicKey::from_base64(&full_event.content.to_owned().room_root_key.unwrap_or_default()) {
+                        Ok(key) => key,
+                        Err(e) => {
+                            warn!("Error deserializing room root key: {e}");
+                            // todo: change to proper error type
+                            return Err(OlmError::MissingSession);
+                        },
+                    };
 
-                    // TODO: do proper error handling
+                    // let rrk_base64 = rrk.to_base64();
+                    let derived_room_id = format!("!{}", Base64::<UrlSafe>::new(rrk.as_bytes().to_vec()).encode());
 
-                    // let rrk = VerifyingKey::from_bytes(&full_event.content.room_root_key.
-                    // unwrap_or_default());
-                    let derived_room_id = Base64::<UrlSafe>::new(rrk.as_bytes().to_vec());
+                    // notable things to document / changes in proposal
+                    // * noting what it means/how to not share cryptographic room material on verification failure? (mostly implementation specific, while flagging device for room key withheld)
 
-                    // TODO: need to verify only content, not full event
-                    // also consider switching to using different verifying function?
-                    let v: ruma::CanonicalJsonValue =
-                        serde_json::to_value(event.json().get()).unwrap().try_into().unwrap();
-                    let canonical_json =
-                        ruma::CanonicalJsonObject::from(v.as_object().unwrap().clone());
+                    // for ruma signatures interoperability purposes, just go with :1 for key id instead of rrk or rsk ids (and document MSC on that)
+                    // && self.verify_event_content(&sender, format!("ed25519:{rrk_base64}").as_str(), rrk, event).await?
 
-                    let rrk2 = Base64::new(rrk.as_bytes().to_vec());
-                    let rrk_map = ruma::signatures::PublicKeyMap::from([(
-                        sender.to_owned().to_string(),
-                        ruma::signatures::PublicKeySet::from([("ed25519:rrk".to_string(), rrk2)]),
-                    )]);
-
-                    // rrk.verify(msg, signature)
-
-                    // if (ruma_signatures::verify_json(event.content.room_root_key, event.content))
-                    // {
-
-                    // }
 
                     // Does the event contain the correct RRK and the user's MSK?
                     // Does the event have a valid signature by the RRK?
-                    if derived_room_id.encode() == full_event.room_id.as_str()
-                        && full_event.content.creator_key.unwrap()
-                            == sender_msk.get_first_key().unwrap().to_base64()
-                        && ruma::signatures::verify_event(
-                            &rrk_map,
-                            &canonical_json,
-                            &full_event.content.room_version,
-                        )
-                        .is_ok_and(|r| r == Verified::Signatures)
+                    if derived_room_id == full_event.room_id.as_str()
+                        && creator_key == sender_msk.get_first_key().unwrap().to_base64()
+                        && self.verify_event_content(rrk, event)
                     {
                         // Pass room membership for room creator, process next event
                         // The user's cause-of-membership event passes verification
 
                         // Add event to cache
-                        changes
+                        let member_info = changes
+                            .room_member_verification
                             .verified_events
                             .entry(room_id.to_owned())
-                            .and_modify(|(_, e)| {
-                                e.insert(full_event.event_id.clone());
-                            })
-                            .or_insert((
-                                full_event.content.room_version,
-                                BTreeSet::from([full_event.event_id]),
-                            ));
-                    } else {
-                        // The user's cause-of-membership event does NOT pass verification
+                            .or_default()
+                            .entry(sender.to_owned())
+                            .or_default();
 
-                        // revisit key witholding and edge/cases
+                        member_info.user_key = creator_key;
+                        member_info.room_create_parent_event =
+                            .insert(RoomMemberVerificationMembershipInfo { user_key: creator_key, ..Default::default() });
 
-                        // need to consider, if roomkey withheld only blacklists devices, what
-                        // happens if new devices are added later?
+                        // changes
+                        //     .room_member_verification
+                        //     .verified_events
+                        //     .entry(room_id.to_owned())
+                        //     .or_default()
+                        //     .insert(full_event.event_id.to_owned());
 
-                        // Note that this procedure specifically verifies that a particular MSK may
-                        // legitimately belong in the room. Devices that
-                        // claim to belong to a user, but are not signed by a Self-Signing Key
-                        // signed by that particular MSK, must not be
-                        // treated as belonging in the room.
+                        // note unsigned server event requires additional handling of tracking keys?
+                        changes
+                            .room_member_verification
+                            .master_keys
+                            .entry(room_id.to_owned())
+                            .or_default()
+                            .insert(sender, RoomMemberVerificationMasterKeys { key: creator_key, membership_events: BTreeSet::from([(full_event.content.event_type().to_string(), full_event.event_id.to_owned())]) });
 
-                        // If clients are unable to verify a user's cause-of-membership event for a
-                        // room, they may refuse to share cryptographic
-                        // material in that room with that user.
-
-                        if let Some(outbound) =
-                            self.store().get_outbound_group_session(room_id).await?
-                        {
-                            let share_info = ShareInfo::new_withheld(WithheldCode::Unauthorised);
-
-                            for device in
-                                self.store().get_user_devices_filtered(&sender).await?.devices()
-                            {
-                                outbound
-                                    .shared_with_set
-                                    .write()
-                                    .unwrap()
-                                    .entry(device.user_id().to_owned())
-                                    .or_default()
-                                    .insert(device.device_id().to_owned(), share_info.clone());
+                        if let Some(invited_user_keys) = full_event.content.to_owned().invited_user_keys {
+                            for (id, keys) in invited_user_keys {
+                                if let Some(key) = keys.first_key_value() {
+                                    changes
+                                        .room_member_verification
+                                        .master_keys
+                                        .entry(room_id.to_owned())
+                                        .or_default()
+                                        .insert(id, RoomMemberVerificationMasterKeys { key: key.1.to_owned(), membership_events: BTreeSet::from([(full_event.content.event_type().to_string(), full_event.event_id.to_owned())]) });
+                                }
                             }
                         }
+                    } else {
+                        println!("Verificaiton failed, event info");
+                        println!("room ids: {:?} {:?}", derived_room_id, full_event.room_id.as_str());
+                        println!("creator keys: {:?} {:?}", creator_key, sender_msk.get_first_key().unwrap().to_base64());
+                        println!("rrk sig: {:?}", self.verify_event_content(rrk, event));
+
+                        // The user's cause-of-membership event does NOT pass verification
+                        changes.room_member_verification.blacklisted_members.entry(room_id.to_owned()).or_default().insert(sender.to_owned());
+
+                        // self.withold_session(&sender, &room_id).await?;
 
                         // temp use error handling later
                         return Ok(());
@@ -369,13 +448,11 @@ impl OlmMachine {
     /// Docs tbd
     async fn verify_room_member_event(
         &self,
-        // verified_events: &mut BTreeMap<OwnedRoomId, BTreeSet<OwnedEventId>>,
         changes: &mut Changes,
         room_id: &OwnedRoomId,
         sender_msk: &MasterPubkey,
         event: &Raw<AnySyncStateEvent>,
     ) -> OlmResult<()> {
-        // update result error type
         match event.deserialize_as::<OriginalSyncStateEvent<RoomMemberEventContent>>() {
             Ok(sync_event) => {
                 let full_event = sync_event.into_full_event(room_id.to_owned());
@@ -384,16 +461,7 @@ impl OlmMachine {
                 let user_msk = match self.get_user_msk(&invited_user).await {
                     Some(k) => k,
                     None => {
-                        // Need to pause verification until we can fetch identity credentials from
-                        // manager
-                        changes.missing_identities.insert(invited_user.to_owned());
-                        // temp: note that events could be duplicated, though does not have effect
-                        // on validation, only bloating the store
-                        changes
-                            .unverified_events
-                            .entry(room_id.to_owned())
-                            .or_default()
-                            .push(event.clone());
+                        self.add_missing_identity(changes, &invited_user, room_id, event);
                         return Err(OlmError::EventError(EventError::MissingSigningKey));
                     }
                 };
@@ -403,99 +471,108 @@ impl OlmMachine {
                 let rsk = match self.get_user_rsk(&sender).await {
                     Some(k) => k,
                     None => {
-                        // Need to pause verification until we can fetch identity credentials from
-                        // manager
-                        changes.missing_identities.insert(sender.to_owned());
-                        // temp: note that events could be duplicated, though does not have effect
-                        // on validation, only bloating the store
-                        changes
-                            .unverified_events
-                            .entry(room_id.to_owned())
-                            .or_default()
-                            .push(event.clone());
+                        self.add_missing_identity(changes, &sender, room_id, event);
                         return Err(OlmError::EventError(EventError::MissingSigningKey));
                     }
                 };
 
-                let rrk = full_event.content.room_root_key.to_owned().unwrap_or_default();
-                let rsk_str = full_event.content.sender_key.to_owned().unwrap_or_default();
+                let rrk = match Ed25519PublicKey::from_base64(&full_event.content.to_owned().room_root_key.unwrap_or_default()) {
+                    Ok(key) => key,
+                    Err(e) => {
+                        warn!("Error deserializing room root key: {e}");
+                        // todo: change to proper error type
+                        return Err(OlmError::MissingSession);
+                    },
+                };
+                let derived_room_id = format!("!{}", Base64::<UrlSafe>::new(rrk.as_bytes().to_vec()).encode());
                 let user_msk_str = full_event.content.user_key.to_owned().unwrap_or_default();
-                let derived_room_id = Base64::<UrlSafe>::new(rrk.as_bytes().to_vec());
-
-                let rsk_first_key = rsk.as_ref().get_first_key_and_id().unwrap();
-
-                // let msk = full_event.content.user_key.clone().unwrap_or_default().to_owned();
-                // let msk_str = full_event.content.user_key.unwrap_or_default().to_owned();
-                // let msk = CrossSigningKey::new(
-                //     sender,
-                //     KeyUsage::Master,
-                //     SigningKeys::from([("msk",
-                // SigningKey::from_parts(&DeviceKeyAlgorithm::Ed25519,
-                // msk_str).unwrap_or_default()]),     signatures
-                // );
-
-                // let v: ruma::CanonicalJsonValue =
-                // serde_json::to_value(event.json().get()).unwrap().try_into().unwrap();
-                // let canonical_json =
-                // ruma::CanonicalJsonObject::from(v.as_object().unwrap().clone());
-
-                let rsk2 = Base64::new(rsk_str.as_bytes().to_vec());
-                let rsk_map = ruma::signatures::PublicKeyMap::from([(
-                    sender.to_owned().to_string(),
-                    ruma::signatures::PublicKeySet::from([("ed25519:rsk".to_string(), rsk2)]),
-                )]);
+                let rsk_str = full_event.content.sender_key.to_owned().unwrap_or_default();
+                let (_, rsk_first_key) = rsk.as_ref().get_first_key_and_id().unwrap();
 
                 // return early json error deserialization
                 let parent_event_id = match full_event.content.parent_event_id.to_owned() {
                     Some(e) => e,
-                    None => todo!(),
+                    None => {
+                        warn!("Error deserializing parent_event_id: {:?}", event);
+                        // todo: change to proper error type
+                        return Err(OlmError::MissingSession);
+                        // Err(OlmError::JsonError(e))
+                    },
                 };
 
-                // ban and leave events: parent event id should point to join event (also
+                let mut is_verified = false;
+
                 // confirm space child events if parent event id)
                 // also if ourself is banned/left, then need to remove old events in verified_events
 
-
                 // Does the event contain the correct RRK and the invited user's MSK?
-                // Does the event have a valid signature by the RSK?
-                // Does the user's RSK have a valid signature by the sender's MSK?
                 // Has parent event been validated? (Lookup this event's parent event ID - i.e., the sender's cause-of-membership event)
+                // Does the sender's MSK match the MSK in the sender's cause-of-membership event?
                 if matches!(full_event.content.membership, MembershipState::Invite | MembershipState::Join | MembershipState::Leave | MembershipState::Ban)
-                    && derived_room_id.encode() == full_event.room_id.as_str()
-                    && rsk_str == rsk.keys().get(&DeviceKeyId::from_parts(DeviceKeyAlgorithm::Ed25519, "rsk".into())).unwrap().to_base64()
+                    && derived_room_id == full_event.room_id.as_str()
                     && user_msk_str == user_msk.get_first_key().unwrap().to_base64()
-                    && rsk_first_key.1.verify_json(&sender, rsk_first_key.0, &full_event.content).is_ok()
-                    && sender_msk.verify_subkey(&rsk).is_ok()
-                    && changes.verified_events.get(room_id).is_some_and(|(_, e)| e.contains(&parent_event_id))
+                    && changes.room_member_verification.verified_events.get(room_id).is_some_and(|e| e.contains(&parent_event_id))
+                    && changes.room_member_verification.master_keys.get(room_id).is_some_and(|m|
+                        m.get(&invited_user).is_some_and(|e|
+                            e.key == user_msk_str && e.membership_events.iter().any(|(event_type, _)| *event_type == StateEventType::RoomCreate.to_string())
+                        )
+                    )
                 {
-                    // Add event to cache
-                    changes.verified_events.entry(room_id.to_owned()).and_modify(|(_, e)| {
-                        e.insert(full_event.event_id.clone());
-                    });
+                    // Does the event have a signature and RSK?
+                    // Is the parent event a m.room.create event?
+                    if full_event.content.sender_key.is_none()
+                        && full_event.content.signatures.is_none()
+                        && matches!(full_event.content.membership, MembershipState::Invite | MembershipState::Join)
+                        && changes.room_member_verification.master_keys.get(room_id).is_some_and(|m|
+                            m.get(&invited_user).is_some_and(|e|
+                                e.membership_events.contains(&(StateEventType::RoomCreate.to_string(), parent_event_id.to_owned()))
+                            )
+                        ) {
 
+                        is_verified = true;
+                    }
+                    // Does the event have a valid signature by the RSK?
+                    // Does the user's RSK have a valid signature by the sender's MSK?
+                    else if rsk_str == rsk_first_key.to_base64()
+                        && self.verify_event_content( rsk_first_key, event)
+                        && sender_msk.verify_subkey(&rsk).is_ok() {
+
+                        is_verified = true;
+                    }
+                }
+
+                if is_verified {
                     // Pass room membership for room creator, process next event
                     // The user's cause-of-membership event passes verification
-                } else {
+
+                    // Add event to cache
+                    changes
+                        .room_member_verification
+                        .verified_events
+                        .entry(room_id.to_owned())
+                        .or_default()
+                        .insert(full_event.event_id.to_owned());
+
+                    // note unsigned server event requires additional handling of tracking keys?
+                    let user_msk_info = changes
+                        .room_member_verification
+                        .master_keys
+                        .entry(room_id.to_owned())
+                        .or_default()
+                        .entry(invited_user.to_owned())
+                        .or_default();
+
+                    user_msk_info.key = user_msk_str;
+                    user_msk_info.membership_events.insert((full_event.content.event_type().to_string(), parent_event_id));
+                }
+                else {
+                    println!("Verificaiton failed, event info");
+                    // println!("room ids: {:?} {:?}", derived_room_id, full_event.room_id.as_str());
+                    // println!("creator keys: {:?} {:?}", creator_key, sender_msk.get_first_key().unwrap().to_base64());
+                    // println!("rrk sig: {:?}", self.verify_event_content(&sender, "ed25519:1", rrk, event));
+
                     // The user's cause-of-membership event does NOT pass verification
-
-                    // revisit key witholding and edge/cases (see room create validation)
-
-                    if let Some(outbound) = self.store().get_outbound_group_session(room_id).await?
-                    {
-                        let share_info = ShareInfo::new_withheld(WithheldCode::Unauthorised);
-
-                        for device in
-                            self.store().get_user_devices_filtered(&sender).await?.devices()
-                        {
-                            outbound
-                                .shared_with_set
-                                .write()
-                                .unwrap()
-                                .entry(device.user_id().to_owned())
-                                .or_default()
-                                .insert(device.device_id().to_owned(), share_info.clone());
-                        }
-                    }
+                    changes.room_member_verification.blacklisted_members.entry(room_id.to_owned()).or_default().insert(sender.to_owned());
 
                     // temp use error handling later
                     return Ok(());
@@ -567,7 +644,6 @@ impl OlmMachine {
     /// Docs tbd
     async fn verify_room_tombstone_event(
         &self,
-        // verified_events: &mut BTreeMap<OwnedRoomId, BTreeSet<OwnedEventId>>,
         changes: &mut Changes,
         room_id: &OwnedRoomId,
         sender_msk: &MasterPubkey,
@@ -581,7 +657,6 @@ impl OlmMachine {
     /// Docs tbd
     async fn verify_space_child_event(
         &self,
-        // verified_events: &mut BTreeMap<OwnedRoomId, BTreeSet<OwnedEventId>>,
         changes: &mut Changes,
         room_id: &OwnedRoomId,
         sender_msk: &MasterPubkey,
@@ -598,10 +673,11 @@ impl OlmMachine {
                     None => {
                         // Need to pause verification until we can fetch identity credentials from
                         // manager
-                        changes.missing_identities.insert(sender.to_owned());
+                        changes.room_member_verification.missing_identities.insert(sender.to_owned());
                         // temp: note that events could be duplicated, though does not have effect
                         // on validation, only bloating the store
                         changes
+                            .room_member_verification
                             .unverified_events
                             .entry(room_id.to_owned())
                             .or_default()
@@ -610,17 +686,10 @@ impl OlmMachine {
                     }
                 };
 
-                let rrk = full_event.content.room_root_key.to_owned().unwrap_or_default();
+                let rrk = Ed25519PublicKey::from_base64(&full_event.content.room_root_key.unwrap_or_default()).unwrap(); // handle unwrap
+                let derived_room_id = format!("!{}", Base64::<UrlSafe>::new(rrk.as_bytes().to_vec()).encode());
                 let rsk_str = full_event.content.sender_key.to_owned().unwrap_or_default();
-                let derived_room_id = Base64::<UrlSafe>::new(rrk.as_bytes().to_vec());
-
-                let rsk_first_key = rsk.as_ref().get_first_key_and_id().unwrap();
-
-                let rsk2 = Base64::new(rsk_str.as_bytes().to_vec());
-                let rsk_map = ruma::signatures::PublicKeyMap::from([(
-                    sender.to_owned().to_string(),
-                    ruma::signatures::PublicKeySet::from([("ed25519:rsk".to_string(), rsk2)]),
-                )]);
+                let (rsk_key_id, rsk_first_key) = rsk.as_ref().get_first_key_and_id().unwrap();
 
                 // return early json error deserialization
                 let parent_event_id = match full_event.content.parent_event_id.to_owned() {
@@ -632,40 +701,26 @@ impl OlmMachine {
                 // Does the event have a valid signature by the RSK?
                 // Does the user's RSK have a valid signature by the sender's MSK?
                 // Has parent event been validated? (Lookup this event's parent event ID - i.e., the sender's cause-of-membership event)
-                if derived_room_id.encode() == full_event.room_id.as_str()
-                    && rsk_str == rsk.keys().get(&DeviceKeyId::from_parts(DeviceKeyAlgorithm::Ed25519, "rsk".into())).unwrap().to_base64()
-                    && rsk_first_key.1.verify_json(&sender, rsk_first_key.0, &full_event.content).is_ok()
+                if derived_room_id == full_event.room_id.as_str()
+                    && rsk_str == rsk_first_key.to_base64()
+                    && self.verify_event_content( rsk_first_key, event)
+                    // && self.verify_event_content(&sender, rsk_key_id.as_str(), rsk_first_key, event)
                     && sender_msk.verify_subkey(&rsk).is_ok()
-                    && changes.verified_events.get(room_id).is_some_and(|(_, e)| e.contains(&parent_event_id))
+                    && changes.room_member_verification.verified_events.get(room_id).is_some_and(|e| e.contains(&parent_event_id))
                 {
                     // Add event to cache
-                    changes.verified_events.entry(room_id.to_owned()).and_modify(|(_, e)| {
-                        e.insert(full_event.event_id.clone());
-                    });
+                    changes
+                        .room_member_verification
+                        .verified_events
+                        .entry(room_id.to_owned())
+                        .or_default()
+                        .insert(full_event.event_id);
 
                     // Pass room membership for room creator, process next event
                     // The user's cause-of-membership event passes verification
                 } else {
                     // The user's cause-of-membership event does NOT pass verification
-
-                    // revisit key witholding and edge/cases (see room create validation)
-
-                    if let Some(outbound) = self.store().get_outbound_group_session(room_id).await?
-                    {
-                        let share_info = ShareInfo::new_withheld(WithheldCode::Unauthorised);
-
-                        for device in
-                            self.store().get_user_devices_filtered(&sender).await?.devices()
-                        {
-                            outbound
-                                .shared_with_set
-                                .write()
-                                .unwrap()
-                                .entry(device.user_id().to_owned())
-                                .or_default()
-                                .insert(device.device_id().to_owned(), share_info.clone());
-                        }
-                    }
+                    // self.withold_session(&sender, &room_id).await?;
 
                     // temp use error handling later
                     return Ok(());

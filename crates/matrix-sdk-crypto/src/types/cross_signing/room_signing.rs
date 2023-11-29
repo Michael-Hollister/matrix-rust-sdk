@@ -1,7 +1,8 @@
 use std::{collections::btree_map::Iter, sync::Arc};
 
-use ruma::{encryption::KeyUsage, OwnedDeviceKeyId, UserId};
+use ruma::{encryption::KeyUsage, OwnedDeviceKeyId, UserId, DeviceKeyId};
 use serde::{Deserialize, Serialize};
+use vodozemac::Ed25519PublicKey;
 
 use super::{CrossSigningKey, MasterPubkey, SigningKey};
 use crate::{olm::VerifyJson, types::SigningKeys, SignatureError};
@@ -27,6 +28,23 @@ impl RoomSigningPubkey {
     /// Get the keys map of containing the user signing keys.
     pub fn keys(&self) -> &SigningKeys<OwnedDeviceKeyId> {
         &self.0.keys
+    }
+
+    /// Get the room signing key with the given key id.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_id` - The id of the key that should be fetched.
+    pub fn get_key(&self, key_id: &DeviceKeyId) -> Option<&SigningKey> {
+        self.0.keys.get(key_id)
+    }
+
+    /// Get the first available room signing key.
+    ///
+    /// There's usually only a single room signing key so this will usually
+    /// fetch the only key.
+    pub fn get_first_key(&self) -> Option<Ed25519PublicKey> {
+        self.0.get_first_key_and_id().map(|(_, k)| k)
     }
 
     /// Check if the given master key is signed by this user signing key.

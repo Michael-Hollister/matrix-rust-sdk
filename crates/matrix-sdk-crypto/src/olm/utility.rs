@@ -245,65 +245,81 @@ impl SignedJsonObject for crate::types::MegolmV1AuthData {
     }
 }
 
-#[cfg(feature = "unstable-msc3917")]
-impl SignedJsonObject for RoomCreateEventContent {
-    fn signatures(&self) -> &Signatures {
-        // redo proper unwraping
-        let val = serde_json::to_value(self.signatures.as_ref().unwrap()).unwrap();
-        let raw = ruma::serde::Raw::new(&val).unwrap();
-        &raw.deserialize_as().unwrap()
-    }
-}
+// #[cfg(feature = "unstable-msc3917")]
+// impl SignedJsonObject for RoomCreateEventContent {
+//     fn signatures(&self) -> &Signatures {
+//         // redo proper unwraping
 
-#[cfg(feature = "unstable-msc3917")]
-impl SignedJsonObject for RoomMemberEventContent {
-    fn signatures(&self) -> &Signatures {
-        // redo proper unwraping
-        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
-        let raw = ruma::serde::Raw::new(&val).unwrap();
-        &raw.deserialize_as().unwrap()
-    }
-}
 
-#[cfg(feature = "unstable-msc3917")]
-impl SignedJsonObject for RoomJoinRulesEventContent {
-    fn signatures(&self) -> &Signatures {
-        // redo proper unwraping
-        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
-        let raw = ruma::serde::Raw::new(&val).unwrap();
-        &raw.deserialize_as().unwrap()
-    }
-}
+//         // serde::Deserializer::deserialize_any(self, visitor)
+//         // &Signatures::new()
 
-#[cfg(feature = "unstable-msc3917")]
-impl SignedJsonObject for RoomThirdPartyInviteEventContent {
-    fn signatures(&self) -> &Signatures {
-        // redo proper unwraping
-        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
-        let raw = ruma::serde::Raw::new(&val).unwrap();
-        &raw.deserialize_as().unwrap()
-    }
-}
+//         // self.signatures.unwrap().iter().map(|(k, v)| (k,
+//         //     v.iter().map(|(k2, v2)| (k2, v2))
+//         // ))
 
-#[cfg(feature = "unstable-msc3917")]
-impl SignedJsonObject for SpaceChildEventContent {
-    fn signatures(&self) -> &Signatures {
-        // redo proper unwraping
-        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
-        let raw = ruma::serde::Raw::new(&val).unwrap();
-        &raw.deserialize_as().unwrap()
-    }
-}
+//         // let val = serde_json::to_value(self.signatures.as_ref().unwrap()).unwrap();
+//         // let raw = ruma::serde::Raw::new(&val).unwrap();
+//         // &raw.deserialize_as().unwrap()
 
-#[cfg(feature = "unstable-msc3917")]
-impl SignedJsonObject for RoomTombstoneEventContent {
-    fn signatures(&self) -> &Signatures {
-        // redo proper unwraping
-        let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
-        let raw = ruma::serde::Raw::new(&val).unwrap();
-        &raw.deserialize_as().unwrap()
-    }
-}
+
+//         // BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceKeyId, String>>
+
+//         // pub struct Signatures(
+//         //     BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceKeyId, Result<Signature, InvalidSignature>>>,
+//         // );
+//     }
+// }
+
+// #[cfg(feature = "unstable-msc3917")]
+// impl SignedJsonObject for RoomMemberEventContent {
+//     fn signatures(&self) -> &Signatures {
+//         // redo proper unwraping
+//         let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+//         let raw = ruma::serde::Raw::new(&val).unwrap();
+//         &raw.deserialize_as().unwrap()
+//     }
+// }
+
+// #[cfg(feature = "unstable-msc3917")]
+// impl SignedJsonObject for RoomJoinRulesEventContent {
+//     fn signatures(&self) -> &Signatures {
+//         // redo proper unwraping
+//         let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+//         let raw = ruma::serde::Raw::new(&val).unwrap();
+//         &raw.deserialize_as().unwrap()
+//     }
+// }
+
+// #[cfg(feature = "unstable-msc3917")]
+// impl SignedJsonObject for RoomThirdPartyInviteEventContent {
+//     fn signatures(&self) -> &Signatures {
+//         // redo proper unwraping
+//         let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+//         let raw = ruma::serde::Raw::new(&val).unwrap();
+//         &raw.deserialize_as().unwrap()
+//     }
+// }
+
+// #[cfg(feature = "unstable-msc3917")]
+// impl SignedJsonObject for SpaceChildEventContent {
+//     fn signatures(&self) -> &Signatures {
+//         // redo proper unwraping
+//         let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+//         let raw = ruma::serde::Raw::new(&val).unwrap();
+//         &raw.deserialize_as().unwrap()
+//     }
+// }
+
+// #[cfg(feature = "unstable-msc3917")]
+// impl SignedJsonObject for RoomTombstoneEventContent {
+//     fn signatures(&self) -> &Signatures {
+//         // redo proper unwraping
+//         let val = serde_json::to_value(self.signatures.unwrap()).unwrap();
+//         let raw = ruma::serde::Raw::new(&val).unwrap();
+//         &raw.deserialize_as().unwrap()
+//     }
+// }
 
 // #[cfg(feature = "unstable-msc3917")]
 // impl SignedJsonObject for RoomCreateEventContent {

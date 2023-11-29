@@ -1200,7 +1200,8 @@ impl OlmMachine {
         }
 
         #[cfg(feature = "unstable-msc3917")]
-        self.verify_room_events(&mut changes, room_events).await;
+        self.verify_room_events(&mut changes, room_events).await?;
+        // println!("PENDING EVENTS: {:?}", sync_changes.to_device_events);
 
         for raw_event in sync_changes.to_device_events {
             let raw_event =

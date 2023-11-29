@@ -15,7 +15,9 @@ version = "0.6.0"
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = []
+# default = []
+# temp for intilisense
+default = ["unstable-msc3917"]
 automatic-room-key-forwarding = []
 js = ["ruma/js", "vodozemac/js"]
 qrcode = ["dep:matrix-sdk-qrcode"]

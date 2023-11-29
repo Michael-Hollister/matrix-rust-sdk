@@ -16,7 +16,9 @@ features = ["docsrs"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["e2e-encryption", "automatic-room-key-forwarding", "sqlite", "native-tls"]
+# default = ["e2e-encryption", "automatic-room-key-forwarding", "sqlite", "native-tls"]
+# temp for intilisense
+default = ["e2e-encryption", "automatic-room-key-forwarding", "sqlite", "native-tls", "unstable-msc3917"]
 testing = ["matrix-sdk-sqlite?/testing", "matrix-sdk-indexeddb?/testing", "matrix-sdk-base/testing"]
 
 e2e-encryption = [

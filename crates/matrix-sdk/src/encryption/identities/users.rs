@@ -432,6 +432,16 @@ impl UserIdentity {
             UserIdentities::Other(i) => i.inner.master_key(),
         }
     }
+
+    /// docs tbd
+    #[cfg(feature = "unstable-msc3917")]
+    pub fn room_signing_key(&self) -> &matrix_sdk_base::crypto::types::RoomSigningPubkey {
+        match &self.inner {
+            UserIdentities::Own(i) => i.inner.room_signing_key(),
+            UserIdentities::Other(i) => i.inner.room_signing_key(),
+        }
+    }
+
 }
 
 #[derive(Debug, Clone)]

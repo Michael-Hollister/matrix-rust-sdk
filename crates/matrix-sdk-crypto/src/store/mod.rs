@@ -236,18 +236,39 @@ pub struct Changes {
     pub secrets: Vec<GossippedSecret>,
     pub next_batch_token: Option<String>,
     #[cfg(feature = "unstable-msc3917")]
-    pub verified_events: BTreeMap<OwnedRoomId, (ruma::RoomVersionId, BTreeSet<ruma::OwnedEventId>)>,
-    // consider removing room version as it may not really be needed
-    #[cfg(feature = "unstable-msc3917")]
+    pub room_member_verification: RoomMemberVerificationChanges,
+}
+
+#[cfg(feature = "unstable-msc3917")]
+#[derive(Debug, Clone, Default)]
+// #[allow(missing_docs)]
+pub struct RoomMemberVerificationChanges {
+    pub verified_events: BTreeMap<OwnedRoomId, BTreeMap<OwnedUserId, RoomMemberVerificationMembershipInfo>>,
     pub unverified_events:
         BTreeMap<OwnedRoomId, Vec<ruma::serde::Raw<ruma::events::AnySyncStateEvent>>>,
-    // pub unverified_events: BTreeMap<OwnedRoomId, Vec<(ruma::OwnedEventId,
-    // ruma::serde::Raw<ruma::events::AnySyncStateEvent>)>>,
-    #[cfg(feature = "unstable-msc3917")]
     pub missing_identities: BTreeSet<OwnedUserId>,
+    pub blacklisted_members: BTreeMap<OwnedRoomId, BTreeSet<OwnedUserId>>,
     // #[cfg(feature = "unstable-msc3917")]
     // pub missing_event_verifying_keys: BTreeMap<OwnedUserId, crate::types::MasterPubkey>,
 }
+
+#[cfg(feature = "unstable-msc3917")]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+// #[allow(missing_docs)]
+pub struct RoomMemberVerificationMembershipInfo {
+    pub user_key: String,
+    pub room_create_parent_event: Option<ruma::OwnedEventId>,
+    pub room_invite_parent_event: Option<ruma::OwnedEventId>,
+}
+
+// #[cfg(feature = "unstable-msc3917")]
+// impl Default for RoomMemberVerificationMasterKeys {
+//     fn default() -> Self {
+//         // note regarding default not really used, just to satisfy derivation?
+//         // Self { key: Default::default(), event_type: Default::default(), membership_event_id: ruma::event_id!("$.:.").to_owned() }
+//         Self { key: Default::default(), membership_events: Default::default() }
+//     }
+// }
 
 /// A user for which we are tracking the list of devices.
 #[derive(Debug, Serialize, Deserialize)]

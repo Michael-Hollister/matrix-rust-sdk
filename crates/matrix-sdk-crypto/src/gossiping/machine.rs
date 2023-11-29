@@ -439,6 +439,7 @@ impl GossipMachine {
             self.answer_room_key_request(event, &s).await
         } else {
             debug!("Received a room key request for an unknown inbound group session",);
+            // println!("KEY REQUEST DOES NOT EXIST");
 
             Ok(None)
         }
@@ -588,6 +589,17 @@ impl GossipMachine {
         // at. For this, we need an outbound session because this
         // information is recorded there.
         } else if let Some(outbound) = outbound_session {
+            println!("SHOULD SHARE KEY!!!");
+
+            #[cfg(feature = "unstable-msc3917")]
+            let blacklisted_members: BTreeMap<ruma::OwnedRoomId, BTreeSet<OwnedUserId>> = self.inner.store.get_value("blacklisted_members").await.unwrap_or_default().unwrap_or_default();
+
+            #[cfg(feature = "unstable-msc3917")]
+            if blacklisted_members.get(session.room_id()).is_some_and(|s| s.contains(device.user_id())) {
+                println!("NOT SHARING SESSION");
+                return Err(KeyForwardDecision::OutboundSessionNotShared);
+            }
+
             match outbound.is_shared_with(device) {
                 ShareState::Shared(message_index) => Ok(Some(message_index)),
                 ShareState::SharedButChangedSenderKey => Err(KeyForwardDecision::ChangedSenderKey),
@@ -1029,6 +1041,12 @@ impl GossipMachine {
             }
         }
     }
+
+    // #[cfg(feature = "automatic-room-key-forwarding")]
+    // #[cfg(all(feature = "automatic-room-key-forwarding", feature = "unstable-msc3917"))]
+    // pub async fn get_or_load(&self, room_id: &RoomId) -> Option<crate::olm::OutboundGroupSession> {
+    //     self.inner.outbound_group_sessions.get_or_load(room_id).await
+    // }
 }
 
 #[cfg(test)]
